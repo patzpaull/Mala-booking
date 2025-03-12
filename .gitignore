@@ -1,0 +1,8 @@
+venv/
+generate_secrets.py
+*.txt
+pycache
+*.pyc 
+*cpython
+versions
+*env*
