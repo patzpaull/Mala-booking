@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", 'postgresql+psycopg2://patz:root@164.90.185.12:5433/maladb')
+DATABASE_URL = os.getenv("DATABASE_URL", 'postgresql+psycopg2://patz:root@164.90.185.12:5432/maladb')
 
 # Configure the engine with connection pooling
 engine = create_engine(
