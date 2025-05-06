@@ -4,9 +4,10 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 from ..database import SessionLocal, engine
-from ..models import Appointment
+# from ..models import Appointment
 from .. import models, schemas
-# from app.dependencies import verify_token
+import logging
+from ..utils.cache import get_cached_appointments, invalidate_appointments_cache, cache_appointments_response
 
 router = APIRouter(
     prefix="/appointments",
@@ -14,6 +15,7 @@ router = APIRouter(
     responses={404: {"description": "Not found"}},
 )
 
+logger = logging.getLogger(__name__)
 # Dependency to get DB session
 
 
@@ -25,30 +27,64 @@ def get_db():
         db.close()
 
 
-@router.get('/')
-async def read_appointments(db: Session = Depends(get_db)
-                            ) -> list[schemas.AppointmentBase]:
+
+@router.post('/', response_model=schemas.Appointment)
+async def create_appointment(appointment: schemas.AppointmentCreate, db: Session = Depends(get_db)
+                             ) -> schemas.Appointment:
+    """
+    Create a new Appointment
+    """
+
+    db_appointment = models.Appointment(**appointment.model_dump())
+    db.add(db_appointment)
+    db.commit()
+    db.refresh(db_appointment)
+    return db_appointment  
+
+
+@router.get('/', response_model=list[schemas.AppointmentBase])
+async def read_appointments(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)) -> list[schemas.AppointmentBase]:
     """
     List all Appointments
     """
-    # user_id = payload.get('sub')
-    # roles= payload.get('realm_acess', {}).get('roles',[])
+    if limit > 100:
+        limit = 100
+    if skip < 0:
+        skip = 0
 
-    # if 'ADMIN' in roles:
-    # appointments = db.query(models.Appointment).scalar().all()
-    # elif 'CUSTOMER' in roles:
-    # appointments = db.query(models.Appointment).filter(models.Appointment.client_id == user_id).all()
-    # elif 'VENDOR' in roles:
-    # appointments = db.query(models.Appointment).filter(models.Appointment.staff_id == user_id).all()
-    # else:
-    # raise HTTPException(
-    # status_code =status.HTTP_403_FORBIDDEN,
-    # detail="Insufficient permissions"
-    # )
+    cached_appointments = await get_cached_appointments(db)
+    if cached_appointments:
+        logger.info("Returning cached appointments")
+        return cached_appointments[skip:skip + limit]
+    
 
-    appointments = db.execute(select(models.Appointment)).scalars().all()
+    query = (db.query(models.Appointment).offset(skip).limit(limit))
 
-    return appointments
+    results = query.all()
+
+    if not results:
+        logger.warning("No Appointments found")
+        raise HTTPException(status_code=404, detail="No appointments found")
+
+    serialized_appointments = [
+        schemas.Appointment(
+            appointment_id = appointment.appointment_id,
+            appointment_time=appointment.appointment_time,
+            duration=appointment.duration,
+            notes=appointment.notes,
+            client_id = appointment.client_id,
+            service_id = appointment.service_id,    
+            reminder_time= appointment.reminder_time,
+            staff_id = appointment.staff_id, 
+            status = appointment.status, 
+            created_at = appointment.created_at,
+            updated_at= appointment.updated_at,
+        ) for appointment in results
+    ]
+
+    await cache_appointments_response(serialized_appointments)
+
+    return serialized_appointments
 
 
 @router.get('/{appointment_id}', response_model=schemas.Appointment)
@@ -60,62 +96,10 @@ async def read_appointment(appointment_id: int, db: Session = Depends(get_db)
     # user_id = token_payload.get("sub")
     # roles = token_payload.get('realm_access', {}).get('roles', [])
 
-    appointment = db.query(models.Appointment).filter(
-        models.Appointment.appointment_id == appointment_id).first()
-    if appointment is None:
+    appointment = db.query(models.Appointment).filter(models.Appointment.appointment_id == appointment_id).first()
+    if not appointment:
         raise HTTPException(status_code=404, detail="Appointment not Found")
-
-     # Authorization check
-    # if 'ADMIN' in roles:
-        # Admin can access any appointment
-    appointment = db.query(models.Appointment).all()
-
-    # pass
-    # elif 'CUSTOMER' in roles:
-    # appointment = db.query(models.Appointment).all()
-
-    # if appointment.client_id != user_id:
-    # raise HTTPException(
-    # status_code=status.HTTP_403_FORBIDDEN,
-    # detail="You can only access your own appointments"
-    # )
-    # elif 'VENDOR' in roles:
-    # appointment = db.query(models.Appointment).filter(
-    # models.Appointment.staff_id == user_id).all()
-    # if appointment.staff_id != user_id:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_403_FORBIDDEN,
-    #         detail="You can only access appointments assigned to you"
-    #     )
-    # elif 'FREELANCE' in roles:
-    # appointment = db.query(models.Appointment).filter(
-    # models.Appointment.staff_id == user_id).all()
-
     return appointment
-
-
-@router.post('/', response_model=schemas.Appointment)
-async def create_appointment(appointment: schemas.AppointmentCreate, db: Session = Depends(get_db)
-                             ) -> schemas.Appointment:
-    """
-    Create a new Appointment
-    """
-
-    db_appointment = models.Appointment(
-        appointment_time=appointment.appointment_time,
-        duration=appointment.duration,
-        client_id=appointment.client_id,
-        service_id=appointment.service_id,
-        staff_id=appointment.staff_id,
-        notes=appointment.notes,
-        reminder_time=appointment.reminder_time,
-        status=appointment.status or "pending",
-    )
-    db.add(db_appointment)
-    db.commit()
-    db.refresh(db_appointment)
-    return db_appointment
-
 
 @router.put('/{appointment_id}', response_model=schemas.Appointment)
 async def update_appointment(appointment_id: int, appointment_update: schemas.AppointmentUpdate, db: Session = Depends(get_db)
@@ -124,43 +108,17 @@ async def update_appointment(appointment_id: int, appointment_update: schemas.Ap
     Update an Appointment
     """
 
-    # token_payload = {}  # Define or import token_payload appropriately
+    db_appointment = db.query(models.Appointment).filter(models.Appointment.appointment_id == appointment_id).first()
 
-    # db_appointment = db.get(models.Appointment, appointment_id)
-    db_appointment = db.query(models.Appointment).filter(
-        models.Appointment.appointment_id == appointment_id).first()
-
-    if db_appointment is None:
+    if not db_appointment:
         raise HTTPException(
             status_code=404, detail='Appointment was not found')
-
-    #  # Authorization check
-    # if 'admin' in roles:
-    #     pass  # Admin can update any appointment
-    # elif 'client' in roles:
-    #     if db_appointment.client_id != user_id:
-    #         raise HTTPException(
-    #             status_code=status.HTTP_403_FORBIDDEN,
-    #             detail="You can only update your own appointments"
-    #         )
-    # elif 'vendor' in roles:
-    #     if db_appointment.staff_id != user_id:
-    #         raise HTTPException(
-    #             status_code=status.HTTP_403_FORBIDDEN,
-    #             detail="You can only update appointments assigned to you"
-    #         )
-    # else:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_403_FORBIDDEN,
-    #         detail="Insufficient permissions to update appointments"
-        # )
-
-    for key, val in appointment_update.model_dump(exclude_none=True).items():
+    for key, val in appointment_update.dict(exclude_unset=True).items():
         setattr(db_appointment, key, val)
 
     db.commit()
     db.refresh(db_appointment)
-
+    await invalidate_appointments_cache()
     return db_appointment
 
 
@@ -170,37 +128,14 @@ async def delete_appointment(appointment_id: int, db: Session = Depends(get_db))
     Deletes an Appointment
     """
 
-    # user_id = token_payload.get('sub')
-    # roles = token_payload.get('realm_access', {}).get('roles', [])
-
     db_appointment = db.query(models.Appointment).filter(
         models.Appointment.appointment_id == appointment_id
     ).first()
 
-    if db_appointment is None:
+    if not db_appointment:
         raise HTTPException(status_code=404, detail="Appointment not found")
-
-    # # Authorization check
-    # if 'admin' in roles:
-    #     pass  # Admin can delete any appointment
-    # elif 'client' in roles:
-    #     if db_appointment.client_id != user_id:
-    #         raise HTTPException(
-    #             status_code=status.HTTP_403_FORBIDDEN,
-    #             detail="You can only delete your own appointments"
-    #         )
-    # elif 'vendor' in roles:
-    #     if db_appointment.staff_id != user_id:
-    #         raise HTTPException(
-    #             status_code=status.HTTP_403_FORBIDDEN,
-    #             detail="You can only delete appointments assigned to you"
-    #         )
-    # else:
-    #     raise HTTPException(
-    #         status_code=status.HTTP_403_FORBIDDEN,
-    #         detail="Insufficient permissions to delete appointments"
-    #     )
 
     db.delete(db_appointment)
     db.commit()
+    await invalidate_appointments_cache()
     return {'message': 'Appointment succesfully deleted'}

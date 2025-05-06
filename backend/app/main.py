@@ -3,17 +3,21 @@
 from fastapi import FastAPI, WebSocket, HTTPException, Request, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import JSONResponse
 from app.middleware.rate_limiter import RateLimiterMiddleware
 from typing import List
 from dotenv import load_dotenv
 import os
+import logging
 import secrets
 
-from app.routers import appointments, users, messages, payments, services, staffs, salons, profiles, auth
+from app.routers import appointments, users, messages, payments, services, staffs, salons, profiles, auth, analytics
 
 app = FastAPI(redirect_slashes=False)
+
+logger = logging.getLogger(__name__)
 
 
 class ConnectionManager:
@@ -45,15 +49,23 @@ session_secret_key = os.getenv("SESSION_SECRET_KEY") or secrets.token_hex(32)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "https://sso.schoolmate.co.tz/*"
-                   ],  # Adjust as necessary
+    allow_origins=["http://localhost:3000"],  # Adjust as necessary
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def log_errors(request: Request, call_next):
+    try:
+        response = await call_next(request)
+        return response
+    except Exception as e:
+        logging.error(f"Unhandled error: {e}", exc_info=True)
+        return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
+
+
 app.add_middleware(
     SessionMiddleware,
     secret_key=session_secret_key,
@@ -62,6 +74,7 @@ app.add_middleware(
 )
 
 app.add_middleware(RateLimiterMiddleware, max_requests=20, window_seconds=60)
+
 
 # Include routers
 app.include_router(users.router)
@@ -73,6 +86,7 @@ app.include_router(profiles.router)
 app.include_router(appointments.router)
 app.include_router(payments.router)
 app.include_router(messages.router)
+app.include_router(analytics.router)
 
 # Exception handler for HTTP exceptions
 

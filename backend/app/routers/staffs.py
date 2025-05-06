@@ -2,17 +2,19 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import select
-from ..database import SessionLocal, engine
-from ..models import Staff
+from ..database import SessionLocal
+import logging
 from .. import models, schemas
-from ..utils.cache import get_cached_staff, invalidate_cache
+from ..utils.cache import get_cached_staff, invalidate_staffs_cache, cache_staffs_response
 
 router = APIRouter(
     prefix="/staff",
     tags=["staff"],
     responses={404: {"description": "Not found"}},
 )
+
+
+logger = logging.getLogger(__name__)
 
 # Dependency to get DB session
 
@@ -27,28 +29,66 @@ def get_db():
 # Listing all payments
 
 
-@router.get('/')
+@router.get('/', response_model=schemas.Staff)
 async def read_staff(skip: int = 0, limit: int = 15, db: Session = Depends(get_db)
                      ) -> list[schemas.Staff]:
+
+    logger.info("Fetching staff members from database")
     """
     List all Staff workers
     """
-    staff = await get_cached_staff(db)
-    if not staff:
-        raise HTTPException(status_code=404, detail="No staff Members found")
-    # appointments = db.query(models.Appointment).offset(skip).limit(limit).all()
-    return staff[skip:skip + limit]
+
+    if limit > 100:
+        limit = 100
+    if skip < 0:
+        skip = 0
+
+    cached_staff = await get_cached_staff(db)
+    if cached_staff:
+        logger.info("Returning cached staff members")
+        return cached_staff[skip:skip + limit]
+
+    query = (
+        db.query(models.Staff)
+        .offset(skip)
+        .limit(limit)
+    )
+
+    results = query.all()
+
+    if not results:
+        logger.warning("No staff members found")
+        raise HTTPException(status_code=404, detail="No staff members found")
+
+    serialized_staff = [
+        schemas.Staff(
+            staff_id=staff.staff_id,
+            user_id=staff.user_id,
+            salon_id=staff.salon_id,
+            first_name=staff.first_name,
+            last_name=staff.last_name,
+            email=staff.email,
+            phone_number=staff.phone_number,
+            role=staff.role,
+            created_at=staff.created_at,
+            updated_at=staff.updated_at
+        ) for staff in results
+    ]
+
+    await cache_staffs_response(serialized_staff)
+
+    return serialized_staff
 
 
-@router.get('/{staff_id}')
+@router.get('/{staff_id}', response_model=schemas.Staff)
 async def read_staff_member(staff_id: int, db: Session = Depends(get_db)
                             ) -> schemas.Staff:
     """
     Get Specific Staff Member with ID 
     """
-    staff_member = await get_cached_staff(db)
-    staff_member = next(
-        (u for u in staff_member if u["staff_id"] == staff_id), None)
+
+    staff_member = db.query(models.Staff).filter(
+        models.Staff.staff_id == staff_id).first()
     if not staff_member:
         raise HTTPException(status_code=404, detail="Staff not Found")
     return staff_member
@@ -68,29 +108,17 @@ async def read_staff_by_salon(salon_id: int, db: Session = Depends(get_db)
     return staff_member
 
 
-@router.post('/')
+@router.post('/', response_model=schemas.StaffCreate)
 async def create_staff(staff_create: schemas.StaffCreate, db: Session = Depends(get_db)
                        ) -> schemas.StaffCreate:
     """
     Create Staff User
     """
-    # db_staffie = db.query(models.Staff).filter(
-    #     models.Staff.email == Staff.email).first()
-    # if db_staffie:
-    #     raise HTTPException(status_code=400, detail="Email already registered")
-
-    db_staff = models.Staff(
-        user_id=staff_create.user_id,
-        salon_id=staff_create.salon_id,
-        email=staff_create.email,
-        first_name=staff_create.first_name,
-        last_name=staff_create.last_name,
-        role=staff_create.role or "Stylist")
+    db_staff = models.Staff(**staff_create.model_dump())
     db.add(db_staff)
     db.commit()
     db.refresh(db_staff)
-
-    # await invalidate_cache("staffs:*")
+    await invalidate_staffs_cache()
     return db_staff
 
 
@@ -100,22 +128,22 @@ async def update_staff(staff_id: int, staff_update: schemas.StaffUpdate, db: Ses
     """
     Update staff info
     """
-    db_staff = db.get(models.Staff, staff_id)
-    if db_staff is None:
+    db_staff = db.query(models.Staff).filter(
+        models.Staff.staff_id == staff_id).first()
+    if not db_staff:
         raise HTTPException(
             status_code=404, detail='Staff was not found')
 
-    for key, val in staff_update.model_dump(exclude_none=True).items():
+    for key, val in staff_update.model_dump(exclude_unset=True).items():
         setattr(db_staff, key, val)
 
     db.commit()
     db.refresh(db_staff)
-
-    # await invalidate_cache(f"staffs:{staff_id}")
+    await invalidate_staffs_cache()
     return db_staff
 
 
-@router.delete('/{staff_id}')
+@router.delete('/{staff_id}', response_model=dict)
 async def delete_staff(staff_id: int, db: Session = Depends(get_db)) -> dict[str, str]:
     """
     Deletes Staff info
@@ -127,7 +155,7 @@ async def delete_staff(staff_id: int, db: Session = Depends(get_db)) -> dict[str
 
     db.delete(db_staff)
     db.commit()
-    # await invalidate_cache("staffs:*")
+    await invalidate_staffs_cache()
     return {'message': 'Staff Info succesfully deleted'}
 
 
@@ -146,5 +174,5 @@ async def delete_staff(salon_id: int, db: Session = Depends(get_db)) -> dict[str
         db.delete(db_staff)
 
     db.commit()
-    # await invalidate_cache("staffs:*")
+    await invalidate_staffs_cache()
     return {'message': f'All Staff members for salon {salon_id} were succesfully deleted'}

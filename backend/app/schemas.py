@@ -1,6 +1,6 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from datetime import date, time
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 
 # Appointment Schemas
@@ -10,6 +10,9 @@ class AppointmentBase(BaseModel):
     notes: Optional[str] = None
     reminder_time: Optional[time] = None
     status: Optional[str] = None
+
+    class Config:
+        from_attributes: True
 
 
 class Appointment(AppointmentBase):
@@ -32,6 +35,9 @@ class AppointmentCreate(BaseModel):
     reminder_time: Optional[time] = None
     status: Optional[str] = "pending"
 
+    class Config:
+        from_attributes: True
+
 
 class AppointmentUpdate(BaseModel):
     appointment_time: Optional[date] = None
@@ -50,6 +56,9 @@ class UserBase(BaseModel):
     email: str
     first_name: str
     last_name: str
+
+    class Config:
+        from_attributes: True
 
 
 class User(BaseModel):
@@ -73,6 +82,9 @@ class UserCreate(UserBase):
     last_name: str
     role: str  # e.g., "USER", "ADMIN"
 
+    class Config:
+        from_attributes: True
+
 
 class UserUpdate(BaseModel):
     username: Optional[str] = None
@@ -85,6 +97,14 @@ class UserUpdate(BaseModel):
     class Config:
         from_attributes: True
 
+class UserInfo(BaseModel):
+    user_id: int
+    keycloak_id:str 
+    username: str
+    email: str
+    first_name:str
+    last_name:str
+    role:str
 
 class SignupRequest(UserCreate):
     pass
@@ -115,7 +135,12 @@ class LoginResponse(BaseModel):
     id_token: str | None = None  # Make id_token optional
     token_type: str = "Bearer"
     expires_in: int = 300
-    refresh_expires_in: int = 1800
+    refresh_expires_in: int | None = 1800
+    csrf_token: Optional[str]= None
+    user_info: Optional[Dict[str,Any]] = None
+    # roles: List[str] = []
+    # username: str
+    # keycloak_id: str
 
 
 class RefreshTokenRequest(BaseModel):
@@ -133,49 +158,127 @@ class Claims(BaseModel):
     exp: int
     iat: int
     iss: str
+    # sub: str
     aud: str
 
     class Config:
-        allow_population_by_filed_name = True
+        allow_population_by_field_name: True
         from_attributes: True
 
 # Profile Schemas
 
 
+class VendorData(BaseModel):
+    businessName: Optional[str]
+    businessCategory: Optional[str]
+    rating: Optional[float]
+
+    class Config:
+        from_attributes: True
+
+
+class FreelancerData(BaseModel):
+    skills: Optional[List[str]]
+    portfolio: Optional[str]
+
+    class Config:
+        from_attributes: True
+
+
+class AdditionalData(BaseModel):
+    preferences: Optional[dict] = None
+    vendor: Optional[dict] = None
+    freelancer: Optional[dict] = None
+
+    class Config:
+        from_attributes: True
+
+
 class ProfileBase(BaseModel):
-    user_id: int
+    user_id: Optional[int] = None
+    userType: str
+    firstName: str
+    lastName: str
+    email:  str
+    phoneNumber: Optional[str] = None
+    address: Optional[str] = None
     bio: Optional[str] = None
     avatar_url: Optional[str] = None
+    created_at: Optional[time] = None
+    updated_at: Optional[time] = None
+    status: Optional[str] = None
+    additionalData: Optional[AdditionalData] = None
     # username: Optional[str] = None
 
     class Config:
         from_attributes: True
 
 
-class Profile(ProfileBase):
-    profile_id: int
-    user_id: int  # Add this field
-    username: str
+class Profile(BaseModel):
+    user_id: int
+    keycloak_id: str
+    firstName: str
+    lastName: str
+    email: str
+    phoneNumber: Optional[str] = None
+    address: Optional[str] = None
     bio: Optional[str] = None
     avatar_url: Optional[str] = None
+    status: Optional[str] = None
+    created_at: Optional[time] = None
+    updated_at: Optional[time] = None
+    userType: Optional[str] = None
+    additionalData: Optional[AdditionalData] = None
 
     class Config:
         from_attributes: True
 
 
 class ProfileCreate(ProfileBase):
-    user_id: int
-    avatar_url: Optional[str] = None
-    bio: Optional[str] = None
-    username: str  # Add the username field
-
-
-class ProfileUpdate(BaseModel):
+    firstName: str
+    lastName: str
+    email: str
+    phoneNumber: Optional[str] = None
+    address: Optional[str] = None
     bio: Optional[str] = None
     avatar_url: Optional[str] = None
+    password: str
+    # status: Optional[str] = None
+    userType: Optional[str] = "CUSTOMER"
+    additionalData: Optional[dict] = None
 
     class Config:
         from_attributes: True
+
+
+@validator('firstName', 'lastName')
+def validate_name(cls, v):
+    if not v.isalpha():
+        raise ValueError('Name must contain only letters')
+    return v
+
+
+@validator('userType')
+def validate_userType(cls, v):
+    valid_user_types = ['CUSTOMER', 'VENDOR', 'ADMIN', 'FREELANCER']
+    if v not in valid_user_types:
+        raise ValueError(
+            f'Invalid userType must be one of {valid_user_types} ')
+    return v
+
+
+class ProfileUpdate(BaseModel):
+    firstName: Optional[str] = None
+    lastName: Optional[str] = None
+    email: Optional[str] = None
+    phoneNumber: Optional[str] = None
+    address: Optional[str] = None
+    bio: Optional[str] = None
+    avatar_url: Optional[str] = None
+    password: Optional[str] = None
+    status: Optional[str] = None
+    userType: Optional[str] = None
+    additionalData: Optional[dict] = None
 
 
 # Message Schema
@@ -214,6 +317,9 @@ class ServiceBase(BaseModel):
     duration: int
     price: float
 
+    class Config:
+        from_attributes: True
+
 
 class Service(ServiceBase):
     service_id: int
@@ -226,6 +332,9 @@ class ServiceCreate(ServiceBase):
     name: str
     description: Optional[str] = None
     price: float
+
+    class Config:
+        from_attributes: True
 
 
 class ServiceUpdate(ServiceBase):
@@ -248,10 +357,22 @@ class SalonBase(BaseModel):
     state: Optional[str] = None
     zip_code: Optional[str] = None
     country: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    phone_number: Optional[str] = None
+    website: Optional[str] = None
+    social_media_links: Optional[Dict[str, str]] = None
+    status: Optional[str] = "ACTIVE"  # New field
+    opening_hours: Optional[Dict[str, Dict[str, str]]] = None  # New f
+
+    class Config:
+        from_attributes: True
 
 
 class Salon(SalonBase):
     salon_id: int
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
     class Config:
         from_attributes: True
@@ -267,6 +388,9 @@ class SalonCreate(SalonBase):
     zip_code: Optional[str] = None
     street: Optional[str] = None
     country: Optional[str] = None
+
+    class Config:
+        from_attributes: True
 
 
 class SalonUpdate(BaseModel):
@@ -290,6 +414,9 @@ class StaffBase(BaseModel):
     email: str
     role: str
 
+    class Config:
+        from_attributes: True
+
 
 class Staff(StaffBase):
     staff_id: int
@@ -303,6 +430,9 @@ class Staff(StaffBase):
 class StaffCreate(StaffBase):
     salon_id: int
     user_id: int
+
+    class Config:
+        from_attributes: True
 
 
 class StaffUpdate(BaseModel):
@@ -319,6 +449,9 @@ class StaffUpdate(BaseModel):
 class ReviewBase(BaseModel):
     ratings: int
     review_text: Optional[str] = None
+
+    class Config:
+        from_attributes: True
 
 
 class Review(ReviewBase):
@@ -348,6 +481,9 @@ class PaymentBase(BaseModel):
     payment_method: str
     payment_status: str
     transaction_id: Optional[str] = None
+
+    class Config:
+        from_attributes: True
 
 
 class Payment(PaymentBase):

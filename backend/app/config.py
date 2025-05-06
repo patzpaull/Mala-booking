@@ -13,7 +13,7 @@ load_dotenv()
 class Settings(BaseSettings):
     keycloak_server_url: str = os.getenv("KEYCLOAK_SERVER_URL")
     keycloak_public_key: str = os.getenv("KEYCLOAK_PUBLIC_KEY")
-    keycloak_audience: str = os.getenv("KEYCLOAK_AUDIENCE")
+    keycloak_audience: str = "account"
     keycloak_realm: str = os.getenv("REALM_NAME")
     keycloak_client_id: str = os.getenv("CLIENT_ID")
     keycloak_admin_username: str = os.getenv("ADMIN_USERNAME")
@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     pg_port: str
     database_url: str
     session_key: str
+    google_scopes: str = os.getenv("GOOGLE_SCOPES")
+    google_service_account: str = os.getenv("GOOGLE_SERVICE_ACCOUNT")
+    google_drive_folder_id: str = os.getenv("GOOGLE_FOLDER_ID")
 
     @computed_field(return_type=str)
     @property
@@ -61,7 +64,7 @@ class Settings(BaseSettings):
 caches.set_config({
     "default": {
         "cache": "aiocache.RedisCache",
-        "endpoint": "localhost",
+        "endpoint": "164.90.185.12",
         "port": 6379,
         "timeout": 1,
         "namespace": "mala_cache",

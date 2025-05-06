@@ -8,13 +8,13 @@ from typing import List
 from ..database import SessionLocal
 import json
 import logging
-from ..dependencies import require_roles, get_current_user, validate_csrf
+from ..dependencies import require_roles, get_current_user_from_cookies, valid_access_token, get_current_user
 # from ..models import U
 from .. import schemas, models
 from ..models import User as DBUser, Role, Profile
 from ..services.keycloak import KeycloakService
 from ..utils.utils import hash_password
-from ..utils.cache import get_cached_users, invalidate_cache
+from ..utils.cache import get_cached_users, invalidate_users_cache, cache_users_response
 
 
 logger = logging.getLogger(__name__)
@@ -94,6 +94,7 @@ async def create_user(user: schemas.SignupRequest, db: Session = Depends(get_db)
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+    await invalidate_users_cache()
 
     return schemas.SignupResponse(
         user_id=new_user.user_id,
@@ -108,21 +109,39 @@ async def create_user(user: schemas.SignupRequest, db: Session = Depends(get_db)
 
 
 @router.get('/', response_model=List[schemas.User])
-async def read_users(skip: int = 0, limit: int = 10, db: Session = Depends(get_db)) -> List[schemas.User]:
-    logger.info("Fetching users from cache")
-    users =await get_cached_users(db)
-    if not users:
-        logger.warning("No users found in cache")
+async def read_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)) -> List[schemas.User]:
+    # logger.info(
+        # f"User {current_user.username} is fetching users list with pagination")
+
+    # Validate pagination parameters
+    if limit > 100:
+        limit = 100
+    if skip < 0:
+        skip = 0
+
+    cached_users = await get_cached_users(db)
+    if cached_users:
+        logger.info("Returning cached users")
+        return cached_users[skip:skip + limit]
+
+    # Use efficient join query with pagination
+    query = (
+        db.query(models.User, models.Role)
+        .outerjoin(models.Role, models.User.role_id == models.Role.id)
+        .offset(skip)
+        .limit(limit)
+    )
+
+    # Execute query and get results
+    results = query.all()
+
+    if not results:
+        logger.warning("No users found")
         raise HTTPException(status_code=404, detail="No users found")
 
-    # Fetch roles for each user
-    users = db.execute(select(models.User)).scalars().all()
-
-    # Serialize the role field to a string
-    serialized_users = []
-    for user in users:
-        role = db.query(Role).filter(Role.id == user.role_id).first()
-        serialized_user = schemas.User(
+    # Serialize results efficiently
+    serialized_users = [
+        schemas.User(
             user_id=user.user_id,
             keycloak_id=user.keycloak_id,
             email=user.email,
@@ -131,7 +150,11 @@ async def read_users(skip: int = 0, limit: int = 10, db: Session = Depends(get_d
             last_name=user.last_name,
             role=role.name if role else None
         )
-        serialized_users.append(serialized_user)
+        for user, role in results
+    ]
+
+    # Cache the results
+    await cache_users_response(serialized_users)
 
     return serialized_users
 
@@ -175,8 +198,9 @@ async def update_user(user_id: int, user_update: schemas.UserUpdate, db: Session
 
     db.commit()
     db.refresh(user)
+    await invalidate_users_cache()
     role = db.query(Role).filter(Role.id == user.role_id).first()
-    return schemas.User(
+    serialized_user_update = [schemas.User(
         user_id=user.user_id,
         keycloak_id=user.keycloak_id,
         email=user.email,
@@ -185,6 +209,11 @@ async def update_user(user_id: int, user_update: schemas.UserUpdate, db: Session
         last_name=user.last_name,
         role=role.name if role else None
     )
+    ]
+
+    await cache_users_response([serialized_user_update])
+
+    return serialized_user_update
 
 
 @router.delete('/{user_id}', response_model=dict)
@@ -201,5 +230,5 @@ async def delete_user(user_id: int, db: Session = Depends(get_db)) -> dict:
 
     db.delete(user)
     db.commit()
-    await invalidate_cache("users:*")
+    await invalidate_users_cache()
     return {"message": "User deleted successfully"}

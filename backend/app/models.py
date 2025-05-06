@@ -1,12 +1,26 @@
 
 from .database import Base
-from sqlalchemy import Column, Integer, String, Date, Time, ForeignKey, Numeric, Text
+from sqlalchemy import Column, Index, Integer, String, Date, Time, ForeignKey, Numeric, Text, Enum, JSON
 from sqlalchemy.orm import relationship, mapped_column
 from sqlalchemy.sql import func
 # from datetime import datetime
 from passlib.context import CryptContext
+import enum
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+class UserType(enum.Enum):
+    CUSTOMER = 'customer'
+    VENDOR = 'vendor'
+    ADMIN = 'admin'
+    FREELANCE = 'freelance'
+
+
+class Status(enum.Enum):
+    ACTIVE = "Active"
+    SUSPENDED = "Suspended"
+    DELETED = "Deleted"
 
 
 class Appointment(Base):
@@ -38,11 +52,19 @@ class User(Base):
     __tablename__ = 'users'
     user_id = Column(Integer, primary_key=True, index=True)
     keycloak_id = Column(String, unique=True, index=True, nullable=False)
-    username = mapped_column(String(255), nullable=False, unique=True)
-    email = mapped_column(String(254), nullable=False, unique=True)
+    username = mapped_column(
+        String(255), nullable=False, unique=True, index=True)
+    email = mapped_column(String(254), nullable=False, unique=True, index=True)
     password_hash = mapped_column(String(255), nullable=False)
     first_name = mapped_column(String(255), nullable=False)
     last_name = mapped_column(String(255), nullable=False)
+    role_id = Column(Integer, ForeignKey('roles.id'), index=True)
+
+    __table_args__ = (
+        # Composite index for name searches
+        Index('idx_user_search', 'first_name', 'last_name'),
+        Index('idx_user_role', 'role_id'),  # Index for role joins
+    )
     role_id = mapped_column(Integer, ForeignKey('roles.id'), nullable=False)
     created_at = mapped_column(Date, default=func.now())
     updated_at = mapped_column(Date, onupdate=func.now())
@@ -62,13 +84,19 @@ class User(Base):
     role = relationship('Role', back_populates="users")
     appointments = relationship('Appointment', back_populates="client")
     reviews = relationship('Review', back_populates="client")
-    profile = relationship('Profile', back_populates="user", uselist=False)
+    # profile = relationship('Profile', back_populates="user",
+    #    uselist=False, foreign_keys='Profile.keycloak_id')
     salon = relationship('Salon', back_populates="owner")
     staff_member = relationship('Staff', back_populates='user', uselist=False)
+    # kc_profile = relationship(
+    # 'Profile', foreign_keys=[keycloak_id], back_populates='kc_user', uselist=False)
     sent_messages = relationship(
         'Message', foreign_keys='Message.sender_id', back_populates='sender', uselist=False)
     received_messages = relationship(
         'Message', foreign_keys='Message.receiver_id', back_populates='receiver', uselist=False)
+
+    profile = relationship('Profile', back_populates="user",
+                           primaryjoin="User.keycloak_id == foreign(Profile.keycloak_id)", uselist=False)
 
     def verify_password(self, password: str):
         return pwd_context.verify(password, self.password_hash)
@@ -92,23 +120,51 @@ class User(Base):
 class Profile(Base):
     __tablename__ = 'profiles'
     profile_id = mapped_column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey(
+        'users.user_id'), nullable=True, unique=True)
+    keycloak_id = Column(String, ForeignKey(
+        'users.keycloak_id'), nullable=False, unique=True)
+    userType = Column(Enum(UserType), nullable=False)
+    firstName = Column(String, nullable=False)
+    lastName = Column(String, nullable=False)
+    email = Column(String, nullable=False)
+    phoneNumber = Column(String, nullable=True)
+    address = Column(String, nullable=True)
     bio = mapped_column(Text, nullable=True)
-    avatar_url = Column(String)
-    user_id = mapped_column(Integer, ForeignKey(
-        'users.user_id'), nullable=False, unique=True)
-    username = Column(String, nullable=False)
+    avatar_url = Column(String, nullable=True)
+    status = Column(Enum(Status), nullable=False)
+    additionalData = Column(JSON, nullable=True)
     created_at = mapped_column(Date)
     updated_at = mapped_column(Date)
 
-    user = relationship('User', back_populates="profile")
+    # user = relationship('User', back_populates="profile",
+    #                     foreign_keys='User.keycloak_id')
+
+    user = relationship('User', back_populates="profile",
+                        primaryjoin="User.keycloak_id == foreign(Profile.keycloak_id)", uselist=False)
+    # user_by_keycloak_id = relationship('User', back_populates="profile")
+
+    # kc_user = relationship('User', foreign_keys=[keycloak_id], back_populates='kc_profile', uselist=False)
 
     def to_dict(self):
         return {
             "profile_id": self.profile_id,
+            "user_id": self.user_id,
+            "keycloak_id": self.keycloak_id,
+            "userType": self.userType,
+            "firstName": self.firstName,
+            "lastName": self.lastName,
+            "email": self.email,
+            "phoneNumber": self.phoneNumber,
+            "address": self.address,
             "bio": self.bio,
             "avatar_url": self.avatar_url,
-            "user_id": self.user_id,
-            "username": self.username,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "status": self.status,
+            "additionalData": self.additionalData,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
         }
 
 
@@ -180,6 +236,14 @@ class Salon(Base):
     state = mapped_column(String(100), nullable=True)
     zip_code = mapped_column(String(20), nullable=True)
     country = mapped_column(String(100), nullable=True)
+    latitude = mapped_column(Numeric(10, 8), nullable=True)
+    longitude = mapped_column(Numeric(11, 8), nullable=True)
+    phone_number = mapped_column(String(20), nullable=True)
+    website = mapped_column(String(255), nullable=True)
+    social_media_links = mapped_column(JSON, nullable=True)
+    status = mapped_column(String(20), nullable=False,
+                           default='ACTIVE')  # New field
+    opening_hours = mapped_column(JSON, nullable=True)  # New field
     created_at = mapped_column(Date)
     updated_at = mapped_column(Date)
 
@@ -200,6 +264,15 @@ class Salon(Base):
             "state": self.state,
             "zip_code": self.zip_code,
             "country": self.country,
+            "latitude": self.latitude,
+            "longitude": self.longitude,
+            "phone_number": self.phone_number,
+            "website": self.website,
+            "social_media_links": self.social_media_links,
+            "status": self.status,  # Include new field
+            "opening_hours": self.opening_hours,  # Include new field
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
         }
 
 
@@ -235,6 +308,9 @@ class Staff(Base):
 
 class Role(Base):
     __tablename__ = 'roles'
+    __table_args__ = (
+        Index('idx_role_name', 'name'),  # Index for role name lookups
+    )
     id = mapped_column(Integer, primary_key=True)
     name = mapped_column(String(255), nullable=False, unique=True)
     description = mapped_column(Text, nullable=True)
