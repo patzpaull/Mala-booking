@@ -28,13 +28,13 @@ keycloak_service = KeycloakService()
 
 logger = logging.getLogger(__name__)
 
-SCOPES = settings.google_scopes
-SERVICE_ACCOUNT_FILE = settings.google_service_account
+# SCOPES = settings.google_scopes
+# SERVICE_ACCOUNT_FILE = settings.google_service_account
 
-credentials = service_account.Credentials.from_service_account_file(
-    SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+# credentials = service_account.Credentials.from_service_account_file(
+    # SERVICE_ACCOUNT_FILE, scopes=SCOPES)
 
-drive_service = build('drive', 'v3', credentials=credentials)
+# drive_service = build('drive', 'v3', credentials=credentials)
 
 
 def get_db():
@@ -291,112 +291,112 @@ async def patch_customer_profile(keycloak_id: str, profile_patch: schemas.Profil
 
     profile_dict = db_profile.to_dict()
     return schemas.Profile.model_validate(profile_dict)
-
-
-def create_folder(folder_name, parent_folder_id=None):
-    """
-    Create a folder in Google Drive and return its ID
-    """
-    folder_metadata = {
-        'name': folder_name,
-        'mimeType': 'application/vnd.google-apps.folder',
-        'parents': [parent_folder_id] if parent_folder_id else []
-    }
-
-    created_folder = drive_service.files().create(
-        body=folder_metadata,
-        fields='id'
-    ).execute()
-
-    print(f'Created folder ID: {created_folder.get("id")}')
-    return created_folder.get('id')
-
-
-def upload_file_obj(file_obj, file_name, mimetype, parent_folder_id=None):
-    """
-    Upload a file object to Google Drive and return its ID
-    """
-    try:
-        media = MediaIoBaseUpload(file_obj, mimetype=mimetype, resumable=True)
-        file_metadata = {
-            'name': file_name,
-            'parents': [parent_folder_id] if parent_folder_id else []
-        }
-        upload_file = drive_service.files().create(
-            body=file_metadata, media_body=media, fields='id').execute()
-        print(f'file uploaded succesfuly. File ID: {upload_file.get("id")}')
-        return upload_file.get('id')
-    except Exception as e:
-        print(f"Error uploading file to Google Drive: {e}")
-        logger.error(f"Error uploading file to Google Drive: {e}")
-        raise HTTPException(
-            status_code=500, detail="Error uploading file to Google Drive")
-
-
-@router.post("/{keycloak_id}/avatar", response_model=dict)
-async def manage_avatar(keycloak_id: str, action: str = Query(..., description="Action to perform: upload, update, or delete"), file: UploadFile = File(None), user_type: str = Query("CUSTOMER", description="User type (e.g., CUSTOMER,VENDOR,ADMIN)"), db: Session = Depends(get_db)
-                        ):
-    """
-    Manage Avatars for Users.
-    Supports Upload, Update, and Delete actions
-    """
+# 
+# 
+# def create_folder(folder_name, parent_folder_id=None):
+    # """
+    # Create a folder in Google Drive and return its ID
+    # """
+    # folder_metadata = {
+        # 'name': folder_name,
+        # 'mimeType': 'application/vnd.google-apps.folder',
+        # 'parents': [parent_folder_id] if parent_folder_id else []
+    # }
+# 
+    # created_folder = drive_service.files().create(
+        # body=folder_metadata,
+        # fields='id'
+    # ).execute()
+# 
+    # print(f'Created folder ID: {created_folder.get("id")}')
+    # return created_folder.get('id')
+# 
+# 
+# def upload_file_obj(file_obj, file_name, mimetype, parent_folder_id=None):
+    # """
+    # Upload a file object to Google Drive and return its ID
+    # """
+    # try:
+        # media = MediaIoBaseUpload(file_obj, mimetype=mimetype, resumable=True)
+        # file_metadata = {
+            # 'name': file_name,
+            # 'parents': [parent_folder_id] if parent_folder_id else []
+        # }
+        # upload_file = drive_service.files().create(
+            # body=file_metadata, media_body=media, fields='id').execute()
+        # print(f'file uploaded succesfuly. File ID: {upload_file.get("id")}')
+        # return upload_file.get('id')
+    # except Exception as e:
+        # print(f"Error uploading file to Google Drive: {e}")
+        # logger.error(f"Error uploading file to Google Drive: {e}")
+        # raise HTTPException(
+            # status_code=500, detail="Error uploading file to Google Drive")
+# 
+# 
+# @router.post("/{keycloak_id}/avatar", response_model=dict)
+# async def manage_avatar(keycloak_id: str, action: str = Query(..., description="Action to perform: upload, update, or delete"), file: UploadFile = File(None), user_type: str = Query("CUSTOMER", description="User type (e.g., CUSTOMER,VENDOR,ADMIN)"), db: Session = Depends(get_db)
+                        # ):
+    # """
+    # Manage Avatars for Users.
+    # Supports Upload, Update, and Delete actions
+    # """
     # db_profile = db.get(models.Profile, user_id)
-    db_profile = db.query(models.Profile).filter(
-        models.Profile.keycloak_id == keycloak_id, models.Profile.userType == user_type.upper()).first()
+    # db_profile = db.query(models.Profile).filter(
+        # models.Profile.keycloak_id == keycloak_id, models.Profile.userType == user_type.upper()).first()
+# 
+    # if not db_profile:
+        # raise HTTPException(
+            # status_code=404, detail=f"{user_type.capitalize()} Profile was not found")
+# 
+    # try:
+        # if action == "delete":
+            # if db_profile.avatar_url:
+                # file_id = db_profile.avatar_url.split('id=')[-1]
+                # drive_service.files().delete(fileId=file_id).execute()
+                # db_profile.avatar_url = None
+                # db.commit()
+                # db.refresh(db_profile)
+                # await invalidate_profiles_cache()
+                # return {"message": f"{user_type.capitalize()}. avatar deleted succesfully"}
+            # return {"message": f"No avatar to delete for {user_type.capitalize()}"}
+# 
+        # elif action in ["upload", "update"]:
+            # if action == "update" and db_profile.avatar_url:
+                # file_id = db_profile.avatar_url.split('id=')[-1]
+                # drive_service.files().delete(fileId=file_id).execute()
+# 
+            # if not file:
+                # raise HTTPException(
+                    # status_code=400, detail="No file provided for upload")
+# 
+            # file_content = await file.read()
+            # file_stream = io.BytesIO(file_content)
+# 
+            # file_id = upload_file_obj(
+                # file_obj=file_stream, file_name=file.filename, mimetype=file.content_type, parent_folder_id=settings.google_drive_folder_id
+            # )
+# 
+            # drive_service.permissions().create(
+                # fileId=file_id, body={'type': 'anyone', 'role': 'reader'}).execute(
+            # )
+# 
+            # avatar_url = f"http://drive.google.com/uc?id={file_id}"
+    #         db_profile.avatar_url = avatar_url
+    #         db.commit()
+    #         db.refresh(db_profile)
+    #         await invalidate_profiles_cache()
 
-    if not db_profile:
-        raise HTTPException(
-            status_code=404, detail=f"{user_type.capitalize()} Profile was not found")
-
-    try:
-        if action == "delete":
-            if db_profile.avatar_url:
-                file_id = db_profile.avatar_url.split('id=')[-1]
-                drive_service.files().delete(fileId=file_id).execute()
-                db_profile.avatar_url = None
-                db.commit()
-                db.refresh(db_profile)
-                await invalidate_profiles_cache()
-                return {"message": f"{user_type.capitalize()}. avatar deleted succesfully"}
-            return {"message": f"No avatar to delete for {user_type.capitalize()}"}
-
-        elif action in ["upload", "update"]:
-            if action == "update" and db_profile.avatar_url:
-                file_id = db_profile.avatar_url.split('id=')[-1]
-                drive_service.files().delete(fileId=file_id).execute()
-
-            if not file:
-                raise HTTPException(
-                    status_code=400, detail="No file provided for upload")
-
-            file_content = await file.read()
-            file_stream = io.BytesIO(file_content)
-
-            file_id = upload_file_obj(
-                file_obj=file_stream, file_name=file.filename, mimetype=file.content_type, parent_folder_id=settings.google_drive_folder_id
-            )
-
-            drive_service.permissions().create(
-                fileId=file_id, body={'type': 'anyone', 'role': 'reader'}).execute(
-            )
-
-            avatar_url = f"http://drive.google.com/uc?id={file_id}"
-            db_profile.avatar_url = avatar_url
-            db.commit()
-            db.refresh(db_profile)
-            await invalidate_profiles_cache()
-
-            return {"message": f"{user_type.capitalize()}avatar {action}d Succesfully.", "avatar_url": avatar_url}
-            # return {"message": "Avatar uploaded successfully", "avatar_url": db_profile.avatar_url}
-        else:
-            raise HTTPException(
-                status_code=400, detail="Invalid action. Use 'upload', 'update', or 'delete'.")
-    except Exception as e:
-        logger.error(
-            f"failed to manage avatar for {user_type.capitalize()}: {e}")
-        raise HTTPException(
-            status_code=500, detail=f"An error occured while managing the avatar: {e}")
-    # return {"message": "Avatar uploaded successfully", "avatar_url": db_profile.avatar_url}
+    #         return {"message": f"{user_type.capitalize()}avatar {action}d Succesfully.", "avatar_url": avatar_url}
+    #         # return {"message": "Avatar uploaded successfully", "avatar_url": db_profile.avatar_url}
+    #     else:
+    #         raise HTTPException(
+    #             status_code=400, detail="Invalid action. Use 'upload', 'update', or 'delete'.")
+    # except Exception as e:
+    #     logger.error(
+    #         f"failed to manage avatar for {user_type.capitalize()}: {e}")
+    #     raise HTTPException(
+    #         status_code=500, detail=f"An error occured while managing the avatar: {e}")
+    # # return {"message": "Avatar uploaded successfully", "avatar_url": db_profile.avatar_url}
 
 
 @router.delete('/customers/{keycloak_id}', response_model=dict)

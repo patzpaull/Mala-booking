@@ -34,9 +34,9 @@ class Settings(BaseSettings):
     pg_port: str
     database_url: str
     session_key: str
-    google_scopes: str = os.getenv("GOOGLE_SCOPES")
-    google_service_account: str = os.getenv("GOOGLE_SERVICE_ACCOUNT")
-    google_drive_folder_id: str = os.getenv("GOOGLE_FOLDER_ID")
+    # google_scopes: str = os.getenv("GOOGLE_SCOPES")
+    # google_service_account: str = os.getenv("GOOGLE_SERVICE_ACCOUNT")
+    # google_drive_folder_id: str = os.getenv("GOOGLE_FOLDER_ID")
 
     @computed_field(return_type=str)
     @property
