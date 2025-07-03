@@ -1,6 +1,6 @@
 venv/
 generate_secrets.py
-*.txt
+# .txt
 pycache
 *.pyc 
 *cpython
