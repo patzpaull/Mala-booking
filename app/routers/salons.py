@@ -19,13 +19,13 @@ router = APIRouter(
 
 logger = logging.getLogger(__name__)
 
+
 def get_db():
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
-
 
 
 def is_salon_open(opening_hours: dict) -> bool:
@@ -50,6 +50,7 @@ def is_salon_open(opening_hours: dict) -> bool:
     close_time = datetime.strptime(close_time, "%H:%M").time()
 
     return open_time <= current_hour <= close_time
+
 
 @router.post("/", response_model=schemas.Salon)
 async def create_salon(salon_create: schemas.SalonCreate, db: Session = Depends(get_db)) -> schemas.Salon:
@@ -79,16 +80,15 @@ async def read_salons(skip: int = 0, limit: int = 100, db: Session = Depends(get
     if skip < 0:
         skip = 0
 
-
     cached_salons = await get_cached_salons(db)
     if cached_salons:
         logger.info("Returning cached salons")
         return cached_salons[skip:skip + limit]
-    
-    query = ( db.query(models.Salon)
-        .offset(skip)
-        .limit(limit))
-    
+
+    query = (db.query(models.Salon)
+             .offset(skip)
+             .limit(limit))
+
     results = query.all()
     if not results:
         logger.warning("No salons found in the database")
@@ -117,6 +117,7 @@ async def read_salons(skip: int = 0, limit: int = 100, db: Session = Depends(get
     await cache_salons_response(serialized_salons)
     return serialized_salons
 
+
 @router.get("/{salon_id}", response_model=schemas.Salon)
 async def read_salon(salon_id: int, db: Session = Depends(get_db)) -> schemas.Salon:
     """
@@ -135,7 +136,8 @@ async def update_salon(salon_id: int, salon_update: schemas.SalonUpdate, db: Ses
     """
     Update a Salon
     """
-    db_salon = db.query(models.Salon).filter(models.Salon.salon_id == salon_id).first()
+    db_salon = db.query(models.Salon).filter(
+        models.Salon.salon_id == salon_id).first()
     if not db_salon:
         raise HTTPException(
             status_code=404, detail='Salon was not found')
@@ -154,10 +156,11 @@ async def delete_service(salon_id: int, db: Session = Depends(get_db)) -> dict[s
     """
     Deletes an Salon
     """
-    db_salon = db.query(models.Salon).filter(models.Salon.salon_id == salon_id).first()
+    db_salon = db.query(models.Salon).filter(
+        models.Salon.salon_id == salon_id).first()
     if not db_salon:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Salon was not found')
-    
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail='Salon was not found')
     db.delete(db_salon)
     db.commit()
     await invalidate_salons_cache()

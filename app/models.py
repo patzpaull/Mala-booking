@@ -286,6 +286,8 @@ class Staff(Base):
     first_name = Column(String, nullable=False)
     last_name = Column(String, nullable=False)
     email = Column(String, unique=True, index=True, nullable=False)
+    phone_number = Column(String(20), nullable=True)  # <-- Add this line
+
     role = mapped_column(String(50), nullable=False)
     created_at = mapped_column(Date, default=func.now())
     updated_at = mapped_column(Date, onupdate=func.now())

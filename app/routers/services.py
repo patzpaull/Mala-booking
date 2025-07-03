@@ -46,7 +46,7 @@ async def read_services(skip: int = 0,
                         limit: int = 100,
                         db: Session = Depends(get_db)
                         ) -> list[schemas.Service]:
-    
+
     logger.info("Fetching services with pagination")
     """
     List all Services
@@ -62,7 +62,7 @@ async def read_services(skip: int = 0,
     if cached_services:
         logger.info("Returning cached services")
         return cached_services[skip:skip + limit]
-    
+
     query = (db.query(models.Service).offset(skip).limit(limit))
 
     results = query.all()
@@ -95,7 +95,8 @@ async def read_service(service_id: int, db: Session = Depends(get_db)) -> schema
     """
     Get a specific Service with ID
     """
-    service = db.query(models.Service).filter(models.Service.service_id == service_id).first()
+    service = db.query(models.Service).filter(
+        models.Service.service_id == service_id).first()
     if not service:
         raise HTTPException(status_code=404, detail="Service not found")
     return service
@@ -107,7 +108,8 @@ async def update_service(service_id: int, service_update: schemas.ServiceUpdate,
     """
     Update a Service
     """
-    db_service = db.query(models.Service).filter(models.Service.service_id == service_id).first()
+    db_service = db.query(models.Service).filter(
+        models.Service.service_id == service_id).first()
     if not db_service:
         raise HTTPException(status_code=404, detail='Service was not found')
 
@@ -125,10 +127,12 @@ async def delete_service(service_id: int, db: Session = Depends(get_db)) -> dict
     """
     Deletes an Service
     """
-    db_service = db.get(models.Service).filter(models.Service.service_id == service_id).first()
+    db_service = db.query(models.Service).filter(
+        models.Service.service_id == service_id).first()
     if not db_service:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail='Service was not found')
-    
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail='Service was not found')
+
     db.delete(db_service)
     db.commit()
     await invalidate_services_cache()

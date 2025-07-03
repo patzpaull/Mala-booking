@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, validator
-from datetime import date, time
+from datetime import date, time, datetime
 from typing import Optional, List, Dict, Any
 
 
@@ -50,7 +50,13 @@ class AppointmentUpdate(BaseModel):
         from_attributes: True
 
 
+class PaginatedAppointment(BaseModel):
+    total: int
+    items: List[Appointment]
+
 # User Schema
+
+
 class UserBase(BaseModel):
     username: str
     email: str
@@ -72,6 +78,11 @@ class User(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class PaginatedUser(BaseModel):
+    total: int
+    items: List[User]
 
 
 class UserCreate(UserBase):
@@ -97,14 +108,16 @@ class UserUpdate(BaseModel):
     class Config:
         from_attributes: True
 
+
 class UserInfo(BaseModel):
     user_id: int
-    keycloak_id:str 
+    keycloak_id: str
     username: str
     email: str
-    first_name:str
-    last_name:str
-    role:str
+    first_name: str
+    last_name: str
+    role: str
+
 
 class SignupRequest(UserCreate):
     pass
@@ -136,8 +149,8 @@ class LoginResponse(BaseModel):
     token_type: str = "Bearer"
     expires_in: int = 300
     refresh_expires_in: int | None = 1800
-    csrf_token: Optional[str]= None
-    user_info: Optional[Dict[str,Any]] = None
+    csrf_token: Optional[str] = None
+    user_info: Optional[Dict[str, Any]] = None
     # roles: List[str] = []
     # username: str
     # keycloak_id: str
@@ -177,12 +190,22 @@ class VendorData(BaseModel):
         from_attributes: True
 
 
+class PaginatedVendorData(BaseModel):
+    total: int
+    items: List[VendorData]
+
+
 class FreelancerData(BaseModel):
     skills: Optional[List[str]]
     portfolio: Optional[str]
 
     class Config:
         from_attributes: True
+
+
+class PaginatedFreelancerData(BaseModel):
+    total: int
+    items: List[FreelancerData]
 
 
 class AdditionalData(BaseModel):
@@ -192,6 +215,11 @@ class AdditionalData(BaseModel):
 
     class Config:
         from_attributes: True
+
+
+class PaginatedAdditionalData(BaseModel):
+    total: int
+    items: List[AdditionalData]
 
 
 class ProfileBase(BaseModel):
@@ -204,8 +232,9 @@ class ProfileBase(BaseModel):
     address: Optional[str] = None
     bio: Optional[str] = None
     avatar_url: Optional[str] = None
-    created_at: Optional[time] = None
-    updated_at: Optional[time] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime
+                         ] = None
     status: Optional[str] = None
     additionalData: Optional[AdditionalData] = None
     # username: Optional[str] = None
@@ -225,13 +254,18 @@ class Profile(BaseModel):
     bio: Optional[str] = None
     avatar_url: Optional[str] = None
     status: Optional[str] = None
-    created_at: Optional[time] = None
-    updated_at: Optional[time] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     userType: Optional[str] = None
     additionalData: Optional[AdditionalData] = None
 
     class Config:
         from_attributes: True
+
+
+class PaginatedProfile(BaseModel):
+    total: int
+    items: List[Profile]
 
 
 class ProfileCreate(ProfileBase):
@@ -342,12 +376,19 @@ class ServiceUpdate(ServiceBase):
     description: Optional[str] = None
     duration: Optional[int] = None
     price: Optional[float] = None
+    salon_id: Optional[int] = None
 
     class Config:
         from_attributes: True
 
 
+class PaginatedService(BaseModel):
+    total: int
+    items: List[Service]
+
 # Salon Schema
+
+
 class SalonBase(BaseModel):
     name: str
     description: Optional[str] = None
@@ -371,8 +412,8 @@ class SalonBase(BaseModel):
 
 class Salon(SalonBase):
     salon_id: int
-    created_at: Optional[str] = None
-    updated_at: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes: True
@@ -388,6 +429,7 @@ class SalonCreate(SalonBase):
     zip_code: Optional[str] = None
     street: Optional[str] = None
     country: Optional[str] = None
+    
 
     class Config:
         from_attributes: True
@@ -402,12 +444,25 @@ class SalonUpdate(BaseModel):
     state: Optional[str] = None
     zip_code: Optional[str] = None
     country: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    phone_number: Optional[str] = None
+    website: Optional[str] = None
+    social_media_links: Optional[Dict[str, str]] = None
+    status: Optional[str] = "ACTIVE"  # New field
+    opening_hours: Optional[Dict[str, Dict[str, str]]] = None
 
     class Config:
         from_attributes: True
 
 
+class PaginatedSalon(BaseModel):
+    total: int
+    items: List[Salon]
+
 # Staff Schemas
+
+
 class StaffBase(BaseModel):
     first_name: str
     last_name: str
@@ -420,7 +475,7 @@ class StaffBase(BaseModel):
 
 class Staff(StaffBase):
     staff_id: int
-    user_id: int
+    # user_id: int
     salon_id: int
 
     class Config:
@@ -429,7 +484,7 @@ class Staff(StaffBase):
 
 class StaffCreate(StaffBase):
     salon_id: int
-    user_id: int
+    # user_id: int
 
     class Config:
         from_attributes: True
@@ -445,7 +500,13 @@ class StaffUpdate(BaseModel):
         from_attributes: True
 
 
+class PaginatedStaff(BaseModel):
+    total: int
+    items: List[Staff]
+
 # Review Schemas
+
+
 class ReviewBase(BaseModel):
     ratings: int
     review_text: Optional[str] = None
@@ -475,7 +536,13 @@ class ReviewUpdate(BaseModel):
         from_attributes: True
 
 
+class PaginatedService(BaseModel):
+    total: int
+    items: List[Review]
+
 # Payment Schemas
+
+
 class PaymentBase(BaseModel):
     amount: float
     payment_method: str
@@ -517,8 +584,8 @@ class RoleBase(BaseModel):
 
 class Role(RoleBase):
     id: int
-    created_at: Optional[time] = None
-    updated_at: Optional[time] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     class Config:
         from_attributes: True
