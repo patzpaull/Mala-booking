@@ -49,7 +49,7 @@ session_secret_key = os.getenv("SESSION_SECRET_KEY") or secrets.token_hex(32)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Adjust as necessary
+    allow_origins=["*"],  # Adjust as necessary
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
