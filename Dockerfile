@@ -8,6 +8,6 @@ RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 
 COPY . /
 
-EXPOSE 8000 
+EXPOSE 8000
 
 CMD [ "fastapi", "run", "app/main.py", "--port", "8000" ]
