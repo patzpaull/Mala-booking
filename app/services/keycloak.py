@@ -18,7 +18,8 @@ import httpx
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.keycloak_server_url}realms/{settings.keycloak_realm}/protocol/openid-connect/token")
+oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl=f"{settings.keycloak_server_url}realms/{settings.keycloak_realm}/protocol/openid-connect/token")
 ALGORITHMS = ["RS256"]
 PUBLIC_KEY = settings.keycloak_public_key
 AUDIENCE = "account"
@@ -205,8 +206,8 @@ class KeycloakService:
                 aud=payload['aud'],
                 # sub=payload['sub']
             )
-            logger.info(f"Claims extracted successfully for user {
-                        claims.preferred_username}")
+            logger.info(
+                f"Claims extracted successfully for user {claims.preferred_username}")
             return claims
         except ExpiredSignatureError:
             logger.error("Token decoding failed: Signature has expired")
