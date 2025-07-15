@@ -181,8 +181,8 @@ async def signup(signup_req: schemas.SignupRequest, db: Session = Depends(get_db
     db.commit()
     db.refresh(user)
 
-    logger.info(f"User {user.username} created succesfully with ID {
-                user.user_id}.")
+    logger.info(
+        f"User {user.username} created succesfully with ID {user.user_id}.")
 
     return schemas.SignupResponse(
         user_id=user.user_id,
