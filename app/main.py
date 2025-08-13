@@ -6,16 +6,45 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.responses import JSONResponse
-from app.middleware.rate_limiter import RateLimiterMiddleware
+from app.middleware import RateLimiterMiddleware, CompressionMiddleware, PerformanceLoggingMiddleware, CacheControlMiddleware
 from typing import List
 from dotenv import load_dotenv
 import os
 import logging
 import secrets
+import uvloop
+import asyncio
+from contextlib import asynccontextmanager
 
 from app.routers import appointments, users, messages, payments, services, staffs, salons, profiles, auth, analytics
+from app.services.keycloak import KeycloakService
+from app.monitoring import log_performance_summary
 
-app = FastAPI(redirect_slashes=False)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Set event loop policy for better performance
+    if hasattr(uvloop, 'install'):
+        uvloop.install()
+    
+    # Initialize services
+    keycloak_service = KeycloakService()
+    
+    # Start performance monitoring
+    monitor_task = asyncio.create_task(log_performance_summary())
+    
+    yield
+    
+    # Cleanup on shutdown
+    monitor_task.cancel()
+    await KeycloakService.close_http_client()
+
+app = FastAPI(
+    title="Mala Booking System",
+    description="High-performance salon booking system",
+    version="2.0.0",
+    redirect_slashes=False,
+    lifespan=lifespan
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,12 +76,18 @@ load_dotenv()
 # Set up session middleware
 session_secret_key = os.getenv("SESSION_SECRET_KEY") or secrets.token_hex(32)
 
+# Add performance middleware in order (last added = first executed)
+app.add_middleware(CompressionMiddleware, minimum_size=500)
+app.add_middleware(PerformanceLoggingMiddleware, slow_request_threshold=2.0)
+app.add_middleware(CacheControlMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Adjust as necessary
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Process-Time"]
 )
 
 
@@ -73,7 +108,7 @@ app.add_middleware(
     https_only=False  # Set to True in production when using HTTPS
 )
 
-app.add_middleware(RateLimiterMiddleware, max_requests=20, window_seconds=60)
+app.add_middleware(RateLimiterMiddleware, max_requests=100, window_seconds=60)  # Increased limit for better performance
 
 
 # Include routers

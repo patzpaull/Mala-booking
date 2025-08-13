@@ -125,7 +125,7 @@ async def get_current_user_from_keycloak(token: str = Depends(oauth2_scheme)) ->
 async def signup(signup_req: schemas.SignupRequest, db: Session = Depends(get_db)):
     logger.info(f"Attempting to sign up user: {signup_req.username}")
 
-    # Check if user already exists
+    # Check if user already exists and get role in single query
     existing_user = db.query(models.User).filter(
         (models.User.email == signup_req.email) |
         (models.User.username == signup_req.username)
@@ -134,6 +134,16 @@ async def signup(signup_req: schemas.SignupRequest, db: Session = Depends(get_db
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email or Username already registered"
+        )
+    
+    # Get role info early to fail fast if invalid
+    role = db.query(models.Role).filter(
+        models.Role.name == signup_req.role).first()
+    if not role:
+        logger.error(f"Role '{signup_req.role}' not found in the database.")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid role specified"
         )
     try:
         # Create user in Keycloak
@@ -156,15 +166,7 @@ async def signup(signup_req: schemas.SignupRequest, db: Session = Depends(get_db
     # Hash the password before saving local
     hashed_pw = hash_password(signup_req.password)
 
-    # Retreive the role id based on the role name
-    role = db.query(models.Role).filter(
-        models.Role.name == signup_req.role).first()
-    if not role:
-        logger.error(f"Role '{signup_req.role}' not found in the database.")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid role specified"
-        )
+    # Role already retrieved above
 
     # Create user in local DB
     user = models.User(
@@ -199,39 +201,46 @@ async def signup(signup_req: schemas.SignupRequest, db: Session = Depends(get_db
 @router.post("/login", response_model=schemas.LoginResponse)
 async def login(login_req: schemas.LoginRequest, response: Response, db: Session = Depends(get_db)):
     try:
+        # Authenticate with Keycloak first (fastest fail)
         tokens = await keycloak_service.authenticate_user(
             login_req.username, login_req.password)
 
-        db_user = db.query(models.User).filter(
-            models.User.username == login_req.username).first()
-        if not db_user:
+        # Single optimized query with join to get user and role in one go
+        db_user_with_role = db.query(
+            models.User.user_id,
+            models.User.keycloak_id, 
+            models.User.email,
+            models.User.username,
+            models.User.first_name,
+            models.User.last_name,
+            models.Role.name.label('role_name')
+        ).join(
+            models.Role, models.User.role_id == models.Role.id
+        ).filter(
+            models.User.username == login_req.username
+        ).first()
+        
+        if not db_user_with_role:
             logger.warning(
                 f"User {login_req.username} authenticated with keycloak but not found in local database")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found in application database"
             )
-
-        role = db.query(models.Role).filter(
-            models.Role.id == db_user.role_id).first()
-        if not role:
-            logger.warning(
-                f"Role ID {db_user.role_id} not found for user {login_req.username}")
-            role_name = "UNKOWN"
-        else:
-            role_name = role.name
+        
+        role_name = db_user_with_role.role_name or "UNKNOWN"
 
         # user_info = keycloak_service.decode_token(tokens["access_token"])
 
         csrf_token = secrets.token_hex(16)
 
         user_payload = {
-            "user_id": db_user.user_id,
-            "keycloak_id": db_user.keycloak_id,
-            "email": db_user.email,
-            "username": db_user.username,
-            "first_name": db_user.first_name,
-            "last_name": db_user.last_name,
+            "user_id": db_user_with_role.user_id,
+            "keycloak_id": db_user_with_role.keycloak_id,
+            "email": db_user_with_role.email,
+            "username": db_user_with_role.username,
+            "first_name": db_user_with_role.first_name,
+            "last_name": db_user_with_role.last_name,
             "role": role_name,
         }
 
@@ -311,12 +320,22 @@ async def check_auth(request: Request, db: Session = Depends(get_db)):
     try:
         # Decode token and get user info
         user_claims = await keycloak_service.decode_token(access_token)
-        username = user_claims.get("preferred_username")
+        username = user_claims.preferred_username
 
-        # Cross-check with our database
-        db_user = db.query(models.User).filter(
-            models.User.username == username).first()
-        if not db_user:
+        # Single optimized query with join
+        user_with_role = db.query(
+            models.User.user_id,
+            models.User.username,
+            models.User.email,
+            models.User.role_id,
+            models.Role.name.label('role_name')
+        ).join(
+            models.Role, models.User.role_id == models.Role.id
+        ).filter(
+            models.User.username == username
+        ).first()
+        
+        if not user_with_role:
             return {
                 "authenticated": True,
                 "keycloak_verified": True,
@@ -324,19 +343,15 @@ async def check_auth(request: Request, db: Session = Depends(get_db)):
                 "message": "User authenticated with Keycloak but not found in database"
             }
 
-        # Get role information
-        role = db.query(models.Role).filter(
-            models.Role.id == db_user.role_id).first()
-
         return {
             "authenticated": True,
             "keycloak_verified": True,
             "db_verified": True,
-            "user_id": db_user.user_id,
-            "username": db_user.username,
-            "email": db_user.email,
-            "role": role.name if role else "UNKNOWN",
-            "role_id": db_user.role_id
+            "user_id": user_with_role.user_id,
+            "username": user_with_role.username,
+            "email": user_with_role.email,
+            "role": user_with_role.role_name or "UNKNOWN",
+            "role_id": user_with_role.role_id
         }
 
     except Exception as e:
