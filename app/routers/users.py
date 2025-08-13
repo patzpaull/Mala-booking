@@ -178,19 +178,23 @@ async def read_user(user_id: int, db: Session = Depends(get_db)) -> schemas.User
 
 
 @router.put("/{user_id}", response_model=schemas.User)
-async def update_user(user_id: int, user_update: schemas.UserUpdate, db: Session = Depends(get_db)) -> schemas.User:
+async def update_user(user_id: int, user_update: schemas.UserUpdate, db: Session = Depends(get_db), current_user: schemas.User = Depends(get_current_user)):
+    # if not current_user:
     user = db.query(DBUser).filter(DBUser.user_id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+ 
+    if current_user.user_id != user_id and current_user.role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Not authorized")
 
-    if user_update.password:
-        user.password_hash = hash_password(user_update.password)
-    if user_update.role:
-        role = db.query(Role).filter(
-            Role.name == user_update.role.upper()).first()
-        if not role:
-            raise HTTPException(status_code=400, detail="Role not found")
-        user.role_id = role.id
+    # if user_update.password:
+    #     user.password_hash = hash_password(user_update.password)
+    # if user_update.role:
+    #     role = db.query(Role).filter(
+    #         Role.name == user_update.role.upper()).first()
+    #     if not role:
+    #         raise HTTPException(status_code=400, detail="Role not found")
+    #     user.role_id = role.id
 
     for key, value in user_update.dict(exclude_unset=True).items():
         if key not in ['password', 'role']:
@@ -199,17 +203,17 @@ async def update_user(user_id: int, user_update: schemas.UserUpdate, db: Session
     db.commit()
     db.refresh(user)
     await invalidate_users_cache()
-    role = db.query(Role).filter(Role.id == user.role_id).first()
-    serialized_user_update = [schemas.User(
+    # role = db.query(Role).filter(Role.id == user.role_id).first()
+    return schemas.User(
         user_id=user.user_id,
         keycloak_id=user.keycloak_id,
         email=user.email,
         username=user.username,
         first_name=user.first_name,
         last_name=user.last_name,
-        role=role.name if role else None
-    )
-    ]
+        role=current_user.role
+    )           
+
 
     await cache_users_response([serialized_user_update])
 

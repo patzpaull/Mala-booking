@@ -3,15 +3,16 @@ from keycloak import KeycloakAdmin, KeycloakOpenID
 from keycloak.exceptions import KeycloakAuthenticationError
 import logging
 import os
-import requests
 from fastapi import HTTPException, status, Depends
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError, ExpiredSignatureError
 from ..config import settings
-from .. import models, schemas
+from .. import schemas
+from ..cache import cache
 from dotenv import load_dotenv
 from typing import Annotated
 import httpx
+import time
 
 
 load_dotenv()
@@ -27,32 +28,64 @@ ISSUER = f'{settings.keycloak_server_url}/realms/{settings.keycloak_realm}'
 
 
 class KeycloakService:
+    _jwks_cache = None
+    _jwks_cache_time = None
+    _jwks_cache_ttl = 3600  # 1 hour cache for JWKS
+    _http_client = None
+    
     def __init__(self):
         self.server_url = settings.keycloak_server_url
         self.realm = settings.keycloak_realm
         self.client_id = settings.keycloak_client_id
         self.client_secret = settings.keycloak_client_secret
         self.token_url = f"{self.server_url}/realms/{self.realm}/protocol/openid-connect/token"
-        # Initialize jwks_url
         self.jwks_url = f"{self.server_url}/realms/{self.realm}/protocol/openid-connect/certs"
         self.issuer = f"{settings.keycloak_server_url}/realms/{settings.keycloak_realm}"
         self.audience = "account"
-        self.keycloak_admin = KeycloakAdmin(
-            server_url=self.server_url,
-            username=settings.keycloak_admin_username,
-            password=settings.keycloak_admin_password,
-            realm_name=self.realm,
-            user_realm_name="master",
-            client_id="admin-cli",
-            verify=True
-        )
-        self.keycloak_openid = KeycloakOpenID(
-            server_url=self.server_url,
-            client_id=self.client_id,
-            realm_name=self.realm,
-            client_secret_key=self.client_secret,
-            verify=True
-        )
+        
+        # Initialize admin client lazily to avoid blocking startup
+        self._keycloak_admin = None
+        self._keycloak_openid = None
+    
+    @property
+    def keycloak_admin(self):
+        if self._keycloak_admin is None:
+            self._keycloak_admin = KeycloakAdmin(
+                server_url=self.server_url,
+                username=settings.keycloak_admin_username,
+                password=settings.keycloak_admin_password,
+                realm_name=self.realm,
+                user_realm_name="master",
+                client_id="admin-cli",
+                verify=True
+            )
+        return self._keycloak_admin
+    
+    @property
+    def keycloak_openid(self):
+        if self._keycloak_openid is None:
+            self._keycloak_openid = KeycloakOpenID(
+                server_url=self.server_url,
+                client_id=self.client_id,
+                realm_name=self.realm,
+                client_secret_key=self.client_secret,
+                verify=True
+            )
+        return self._keycloak_openid
+    
+    @classmethod
+    async def get_http_client(cls):
+        if cls._http_client is None:
+            timeout = httpx.Timeout(10.0, connect=5.0)
+            limits = httpx.Limits(max_keepalive_connections=20, max_connections=100)
+            cls._http_client = httpx.AsyncClient(timeout=timeout, limits=limits)
+        return cls._http_client
+    
+    @classmethod
+    async def close_http_client(cls):
+        if cls._http_client:
+            await cls._http_client.aclose()
+            cls._http_client = None
 
     async def create_user_async(self, email: str, username: str, password: str, first_name: str, last_name: str) -> str:
         """
@@ -139,21 +172,58 @@ class KeycloakService:
                 detail="Authentication service error",
             ) from e
 
+    async def _get_jwks_cached(self) -> dict:
+        """Get JWKS with Redis caching to avoid repeated requests"""
+        cache_key = f"jwks:{self.realm}"
+        
+        # Try to get from Redis cache first
+        jwks = await cache.get(cache_key)
+        if jwks:
+            return jwks
+        
+        # Fetch new JWKS
+        try:
+            client = await self.get_http_client()
+            response = await client.get(self.jwks_url)
+            response.raise_for_status()
+            jwks = response.json()
+            
+            # Cache for 1 hour
+            await cache.set(cache_key, jwks, ttl=3600)
+            
+            return jwks
+        except httpx.HTTPError:
+            logger.error(f"JWKS endpoint error, using fallback")
+            # Try in-memory cache as fallback
+            current_time = time.time()
+            if (self._jwks_cache is not None and 
+                self._jwks_cache_time is not None and 
+                current_time - self._jwks_cache_time < self._jwks_cache_ttl):
+                logger.warning("Using stale in-memory JWKS cache")
+                return self._jwks_cache
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Authentication service unavailable",
+            )
+    
     async def decode_token(self, token: str) -> 'schemas.Claims':
         """
-        Decode and validate JWT token using Keycloak's public keys
+        Decode and validate JWT token using cached Keycloak public keys
         """
-
         try:
-            jwks_response = requests.get(self.jwks_url)
-            jwks_response.raise_for_status()
-            jwks = jwks_response.json()
-
+            # Check if we've already decoded this token recently
+            token_hash = str(hash(token))[-8:]  # Use last 8 chars of hash
+            cache_key = f"token:{token_hash}"
+            cached_claims = await cache.get(cache_key)
+            if cached_claims:
+                return schemas.Claims(**cached_claims)
+            
+            # Get JWKS with caching
+            jwks = await self._get_jwks_cached()
+            
             # Decode JWT header
             unverified_header = jwt.get_unverified_header(token)
-            logger.debug(f"Unverified JWT header: {unverified_header}")
-            logger.debug(f"JWKS keys: {jwks.get('keys', [])}")
-
+            
             # Find the key with the matching kid
             rsa_key = {}
             for key in jwks.get('keys', []):
@@ -166,6 +236,7 @@ class KeycloakService:
                         'e': key.get('e')
                     }
                     break
+            
             if not rsa_key:
                 logger.error("Unable to find appropriate key in JWKS")
                 raise HTTPException(
@@ -173,8 +244,8 @@ class KeycloakService:
                     detail="Invalid token",
                     headers={"WWW-Authenticate": "Bearer"},
                 )
-
-                # decode and validate token
+            
+            # Decode and validate token
             payload = jwt.decode(
                 token,
                 rsa_key,
@@ -182,15 +253,10 @@ class KeycloakService:
                 audience=self.audience,
                 issuer=self.issuer
             )
-            logger.debug(f"Decoded JWT payload: {payload}")
-            logger.debug(
-                f"Expected audience: {AUDIENCE}, Token audience: {payload.get('aud')}")
-
+            
             roles = payload.get('realm_access', {}).get('roles', [])
-            # logger.debug(f"Extracted roles: {roles}")
-
-            # Map claims to pydantic claims model
-            # c  # Map payload to Claims schema
+            
+            # Map payload to Claims schema
             claims = schemas.Claims(
                 id=payload['sub'],
                 email=payload.get('email', ''),
@@ -202,34 +268,32 @@ class KeycloakService:
                 exp=payload['exp'],
                 iat=payload['iat'],
                 iss=payload['iss'],
-                aud=payload['aud'],
-                # sub=payload['sub']
+                aud=payload['aud']
             )
-            logger.info(
-                f"Claims extracted successfully for user {claims.preferred_username}")
+            
+            # Cache the decoded claims for 5 minutes
+            await cache.set(cache_key, claims.dict(), ttl=300)
+            
             return claims
+            
         except ExpiredSignatureError:
-            logger.error("Token decoding failed: Signature has expired")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Token has expired",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        except JWTError as e:
-            logger.error(f"Token decoding failed: {e}")
+        except JWTError:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Could not validate credentials",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        except requests.HTTPError as e:
-            logger.error(f"JWKS endpoint error: {e}")
+        except httpx.HTTPError:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="Authentication service unavailable",
             )
-        except Exception as e:
-            logger.error(f"Unexpected error during token decoding: {e}")
+        except Exception:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Internal server error",
@@ -247,7 +311,7 @@ class KeycloakService:
             raise Exception(f"Failed to get user from keycloak: {e}")
 
     async def authenticate_user(self, username: str, password: str) -> dict:
-        """Authenticate user with Keycloak"""
+        """Authenticate user with Keycloak using persistent connection"""
         try:
             data = {
                 'client_id': self.client_id,
@@ -255,19 +319,16 @@ class KeycloakService:
                 'grant_type': 'password',
                 'username': username,
                 'password': password,
-                'scope': 'openid'  # Add this to get id_token
+                'scope': 'openid'
             }
-            logger.debug(f"Token request data {data}")
-
-            async with httpx.AsyncClient() as client:
-                response = await client.post(self.token_url, data=data)
-                logger.debug(f"Token response status: {response.status_code}")
-                logger.debug(f"Token response body: {response.text}")
-                response.raise_for_status()
-                tokens = response.json()
-
-                # Provide default values if tokens are missing
-                return tokens
+            
+            client = await self.get_http_client()
+            response = await client.post(self.token_url, data=data)
+            response.raise_for_status()
+            tokens = response.json()
+            
+            return tokens
+            
         except httpx.HTTPError as e:
             logger.error(f"Authentication failed: {e}")
             raise HTTPException(
