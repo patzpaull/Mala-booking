@@ -1,7 +1,7 @@
 # app/routers/services.py
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import select
 from ..database import SessionLocal, engine
 from ..models import Salon
@@ -85,34 +85,75 @@ async def read_salons(skip: int = 0, limit: int = 100, db: Session = Depends(get
         logger.info("Returning cached salons")
         return cached_salons[skip:skip + limit]
 
-    query = (db.query(models.Salon)
-             .offset(skip)
-             .limit(limit))
+    query = (db.query(models.Salon).options(selectinload(models.Salon.owner) if hasattr(models.Salon, 'owner') else (),
+                                            selectinload(models.Salon.services) if hasattr(
+                                                models.Salon, 'services') else (),
+                                            selectinload(models.Salon.reviews) if hasattr(
+                                                models.Salon, 'reviews') else (),
+                                            selectinload(models.Salon.staff_member) if hasattr(models.Salon, 'staff_member') else ()))
+    query = query.offset(skip).limit(limit)
 
     results = query.all()
     if not results:
         logger.warning("No salons found in the database")
         raise HTTPException(status_code=404, detail="No salons found")
-    serialized_salons = [
-        schemas.Salon(
-            salon_id=salon.salon_id,
-            name=salon.name,
-            description=salon.description,
-            image_url=salon.image_url,
-            owner_id=salon.owner_id,
-            street=salon.street,
-            city=salon.city,
-            state=salon.state,
-            zip_code=salon.zip_code,
-            country=salon.country,
-            created_at=salon.created_at,
-            updated_at=salon.updated_at,
-            owner=salon.owner.to_dict() if salon.owner else None,
-            services=[service.to_dict() for service in salon.services],
-            reviews=[review.to_dict() for review in salon.reviews],
-            staff_member=[staff.to_dict() for staff in salon.staff_member]
-        ) for salon in results
-    ]
+
+    serialized_salons = []
+    for salon in results:
+        serialized_salons.append(
+            schemas.Salon(
+                salon_id=salon.salon_id,
+                name=salon.name,
+                description=salon.description,
+                image_url=getattr(salon, "image_url", None),
+                street=getattr(salon, "street", None),
+                city=getattr(salon, "city", None),
+                state=getattr(salon, "state", None),
+                zip_code=getattr(salon, "zip_code", None),
+                country=getattr(salon, "country", None),
+                latitude=getattr(salon, "latitude", None),
+                longitude=getattr(salon, "longitude", None),
+                phone_number=getattr(salon, "phone_number", None),
+                website=getattr(salon, "website", None),
+                social_media_links=getattr(salon, "social_media_links", None),
+                status=getattr(salon, "status", None),
+                opening_hours=getattr(salon, "opening_hours", None),
+                created_at=getattr(salon, "created_at", None),
+                updated_at=getattr(salon, "updated_at", None),
+                owner=(
+                    {
+                        "user_id": salon.owner.user_id,
+                        "email": salon.owner.email,
+                        "first_name": salon.owner.first_name,
+                        "last_name": salon.owner.last_name,
+                    } if getattr(salon, "owner", None) else None
+                ),
+                services=[
+                    {
+                        "service_id": s.service_id,
+                        "name": s.name,
+                        "price": s.price,
+                        "duration": s.duration
+                    } for s in getattr(salon, "services", []) or []
+                ],
+                reviews=[
+                    {
+                        "review_id": r.review_id,
+                        "rating": getattr(r, "rating", None),
+                        "comment": getattr(r, "comment", None)
+                    } for r in getattr(salon, "reviews", []) or []
+                ],
+                staff_member=[
+                    {
+                        "staff_id": st.staff_id,
+                        "first_name": st.first_name,
+                        "last_name": st.last_name,
+                        "role": st.role,
+                        "email": st.email
+                    } for st in getattr(salon, "staff_member", []) or []
+                ]
+            )
+        )
 
     await cache_salons_response(serialized_salons)
     return serialized_salons
