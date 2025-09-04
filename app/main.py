@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from app.routers import appointments, users, messages, payments, services, staffs, salons, profiles, auth, analytics
 from app.services.keycloak import KeycloakService
 from app.monitoring import log_performance_summary
+from app.utils.responses import error_response
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -111,52 +112,53 @@ app.add_middleware(
 app.add_middleware(RateLimiterMiddleware, max_requests=100, window_seconds=60)  # Increased limit for better performance
 
 
-# Include routers
-app.include_router(users.router)
-app.include_router(salons.router)
-app.include_router(auth.router)
-app.include_router(services.router)
-app.include_router(staffs.router)
-app.include_router(profiles.router)
-app.include_router(appointments.router)
-app.include_router(payments.router)
-app.include_router(messages.router)
-app.include_router(analytics.router)
+# Include routers with v1 versioning
+app.include_router(users.router, prefix="/v1")
+app.include_router(salons.router, prefix="/v1")
+app.include_router(auth.router, prefix="/v1")
+app.include_router(services.router, prefix="/v1")
+app.include_router(staffs.router, prefix="/v1")
+app.include_router(profiles.router, prefix="/v1")
+app.include_router(appointments.router, prefix="/v1")
+app.include_router(payments.router, prefix="/v1")
+app.include_router(messages.router, prefix="/v1")
+app.include_router(analytics.router, prefix="/v1")
 
 # Exception handler for HTTP exceptions
 
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+    return error_response(message=exc.detail, code=exc.status_code)
 
 
-@app.websocket("/ws/{client_id}")
-async def websocket_endpoint(websocket: WebSocket, client_id: int):
+@app.websocket("/ws/appointments/{appointment_id}")
+async def websocket_endpoint(websocket: WebSocket, appointment_id: int):
     await manager.connect(websocket)
     try:
         while True:
             data = await websocket.receive_text()
-            await manager.send_personal_message(f"You wrote: {data}", websocket)
-            await manager.broadcast(f"Client {client_id} says: {data}")
+            # Broadcast message to all participants in this appointment
+            await manager.broadcast(f"Appointment {appointment_id}: {data}")
     except WebSocketDisconnect:
         manager.disconnect(websocket)
-        await manager.broadcast(f"Client {client_id} left the chat")
+        await manager.broadcast(f"User left appointment {appointment_id} chat")
 
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
-    return JSONResponse(
-        status_code=422,
-        content={"detail": exc.errors(), "body": exc.body},
+    return error_response(
+        message="Validation error", 
+        code=422,
+        details={"errors": exc.errors(), "body": exc.body}
     )
 
 
 @app.exception_handler(Exception)
 async def generic_exception_handler(request: Request, exc: Exception):
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "An internal server error occurred"},
+    return error_response(
+        message="An internal server error occurred",
+        code=500
     )
 
 
