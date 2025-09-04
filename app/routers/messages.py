@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from datetime import time
+from datetime import datetime, timezone
 from typing import List
 
 from .. import models, schemas
@@ -33,18 +33,18 @@ async def send_message(
         raise HTTPException(status_code=404, detail="Appointment not found")
 
     # Authorization check: Sender must be either the client or a staff member
-    # if current_user.user_id not in (appointment.client_id, appointment.staff_id):
-        # raise HTTPException(
-        # status_code=status.HTTP_403_FORBIDDEN,
-        # detail="Not authorized to send messages for this appointment"
-        # )
+    if current_user.user_id not in (appointment.client_id, appointment.staff_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to send messages for this appointment"
+        )
 
     db_message = models.Message(
         sender_id=current_user.user_id,
         receiver_id=message_create.receiver_id,
         appointment_id=appointment_id,
         message_text=message_create.message_text,
-        sent_time=time.utcnow()
+        sent_time=datetime.now(timezone.utc)
     )
 
     db.add(db_message)
@@ -68,12 +68,12 @@ def get_messages(
     if not appointment:
         raise HTTPException(status_code=404, detail="Appointment not found")
 
-    # # Authorization check
-    # if current_user.user_id not in (appointment.client_id, appointment.staff_id):
-    #     raise HTTPException(
-    #         status_code=status.HTTP_403_FORBIDDEN,
-    #         detail="Not authorized to view messages for this appointment"
-    #     )
+    # Authorization check
+    if current_user.user_id not in (appointment.client_id, appointment.staff_id):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to view messages for this appointment"
+        )
 
     messages = db.query(models.Message).filter(
         models.Message.appointment_id == appointment_id

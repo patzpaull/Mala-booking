@@ -3,6 +3,9 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from .. import models
 from sqlalchemy.sql import func
+from typing import Dict, List
+from ..utils.responses import success_response
+from ..dependencies import get_current_user
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -63,3 +66,146 @@ async def get_campaign_monitor_data(db: Session = Depends(get_db)):
         {"date": "11-12-2017", "click": 423, "cost": 123, "ctr": "78.6%", "arpu": "45.6%", "ecpi": "6.85", "roi": "7:45", "revenue": "33.8%"},
     ]
     return campaigns
+
+@router.get("/appointments-by-status")
+async def get_appointments_by_status(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Get appointments grouped by status - required by technical specs
+    """
+    # Query appointments by status
+    status_counts = db.query(
+        models.Appointment.status,
+        func.count(models.Appointment.appointment_id).label('count')
+    ).group_by(models.Appointment.status).all()
+    
+    result = {status: count for status, count in status_counts}
+    
+    return success_response(
+        data=result,
+        message="Appointments by status retrieved successfully"
+    )
+
+@router.get("/popular-services")
+async def get_popular_services(
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Get most popular services based on appointment count - required by technical specs
+    """
+    popular_services = db.query(
+        models.Service.name,
+        models.Service.service_id,
+        func.count(models.Appointment.appointment_id).label('booking_count')
+    ).join(
+        models.Appointment, models.Service.service_id == models.Appointment.service_id
+    ).group_by(
+        models.Service.service_id, models.Service.name
+    ).order_by(
+        func.count(models.Appointment.appointment_id).desc()
+    ).limit(limit).all()
+    
+    result = [
+        {
+            "service_id": service_id,
+            "name": name,
+            "booking_count": count
+        }
+        for name, service_id, count in popular_services
+    ]
+    
+    return success_response(
+        data=result,
+        message="Popular services retrieved successfully"
+    )
+
+@router.get("/messages-per-appointment")
+async def get_messages_per_appointment(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Get message count per appointment - required by technical specs
+    """
+    message_counts = db.query(
+        models.Appointment.appointment_id,
+        func.count(models.Message.id).label('message_count')
+    ).join(
+        models.Message, models.Appointment.appointment_id == models.Message.appointment_id
+    ).group_by(
+        models.Appointment.appointment_id
+    ).all()
+    
+    result = [
+        {
+            "appointment_id": appointment_id,
+            "message_count": count
+        }
+        for appointment_id, count in message_counts
+    ]
+    
+    return success_response(
+        data=result,
+        message="Message counts per appointment retrieved successfully"
+    )
+
+@router.get("/revenue-analytics")
+async def get_revenue_analytics(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user)
+):
+    """
+    Get comprehensive revenue analytics - required by technical specs
+    """
+    # Total revenue from completed payments
+    total_revenue = db.query(
+        func.sum(models.Payment.amount)
+    ).filter(
+        models.Payment.payment_status == 'completed'
+    ).scalar() or 0
+    
+    # Revenue by payment method
+    revenue_by_method = db.query(
+        models.Payment.payment_method,
+        func.sum(models.Payment.amount).label('revenue')
+    ).filter(
+        models.Payment.payment_status == 'completed'
+    ).group_by(
+        models.Payment.payment_method
+    ).all()
+    
+    # Monthly revenue (last 12 months)
+    monthly_revenue = db.query(
+        func.extract('month', models.Payment.created_at).label('month'),
+        func.extract('year', models.Payment.created_at).label('year'),
+        func.sum(models.Payment.amount).label('revenue')
+    ).filter(
+        models.Payment.payment_status == 'completed'
+    ).group_by(
+        func.extract('month', models.Payment.created_at),
+        func.extract('year', models.Payment.created_at)
+    ).order_by(
+        func.extract('year', models.Payment.created_at),
+        func.extract('month', models.Payment.created_at)
+    ).all()
+    
+    result = {
+        "total_revenue": float(total_revenue),
+        "revenue_by_method": [
+            {"method": method, "revenue": float(revenue)}
+            for method, revenue in revenue_by_method
+        ],
+        "monthly_revenue": [
+            {"month": int(month), "year": int(year), "revenue": float(revenue)}
+            for month, year, revenue in monthly_revenue
+        ]
+    }
+    
+    return success_response(
+        data=result,
+        message="Revenue analytics retrieved successfully"
+    )

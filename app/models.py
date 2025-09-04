@@ -1,6 +1,6 @@
 
 from .database import Base
-from sqlalchemy import Column, Index, Integer, String, Date, Time, ForeignKey, Numeric, Text, Enum, JSON
+from sqlalchemy import Column, Index, Integer, String, Date, Time, DateTime, ForeignKey, Numeric, Text, Enum, JSON
 from sqlalchemy.orm import relationship, mapped_column
 from sqlalchemy.sql import func
 # from datetime import datetime
@@ -27,7 +27,7 @@ class Appointment(Base):
     __tablename__ = 'appointments'
 
     appointment_id = mapped_column(Integer, primary_key=True, index=True)
-    appointment_time = mapped_column(Date, nullable=False)
+    appointment_time = mapped_column(DateTime, nullable=False)
     duration = mapped_column(Integer, nullable=False)
     notes = mapped_column(Text, nullable=True)
     client_id = mapped_column(Integer, ForeignKey(
@@ -38,8 +38,8 @@ class Appointment(Base):
     staff_id = mapped_column(Integer, ForeignKey(
         'staff.staff_id'), nullable=True)
     status = mapped_column(String(20), nullable=False, default='pending')
-    created_at = mapped_column(Date, default=func.now())
-    updated_at = mapped_column(Date, onupdate=func.now())
+    created_at = mapped_column(DateTime, default=func.now())
+    updated_at = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
     client = relationship('User', back_populates="appointments")
     service = relationship('Service', back_populates="appointments")
@@ -58,16 +58,15 @@ class User(Base):
     password_hash = mapped_column(String(255), nullable=False)
     first_name = mapped_column(String(255), nullable=False)
     last_name = mapped_column(String(255), nullable=False)
-    role_id = Column(Integer, ForeignKey('roles.id'), index=True)
+    role_id = mapped_column(Integer, ForeignKey('roles.id'), nullable=False)
+    created_at = mapped_column(DateTime, default=func.now())
+    updated_at = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
     __table_args__ = (
         # Composite index for name searches
         Index('idx_user_search', 'first_name', 'last_name'),
         Index('idx_user_role', 'role_id'),  # Index for role joins
     )
-    role_id = mapped_column(Integer, ForeignKey('roles.id'), nullable=False)
-    created_at = mapped_column(Date, default=func.now())
-    updated_at = mapped_column(Date, onupdate=func.now())
 
     def to_dict(self):
         return {
@@ -134,8 +133,8 @@ class Profile(Base):
     avatar_url = Column(String, nullable=True)
     status = Column(Enum(Status), nullable=False)
     additionalData = Column(JSON, nullable=True)
-    created_at = mapped_column(Date)
-    updated_at = mapped_column(Date)
+    created_at = mapped_column(DateTime, default=func.now())
+    updated_at = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
     # user = relationship('User', back_populates="profile",
     #                     foreign_keys='User.keycloak_id')
@@ -178,7 +177,7 @@ class Message(Base):
     appointment_id = mapped_column(Integer, ForeignKey(
         'appointments.appointment_id'), nullable=False)
     message_text = mapped_column(Text, nullable=False)
-    sent_time = mapped_column(Date, default=func.now(), nullable=False)
+    sent_time = mapped_column(DateTime, default=func.now(), nullable=False)
 
     sender = relationship('User', foreign_keys=[
                           sender_id], back_populates='sent_messages')
@@ -206,8 +205,8 @@ class Service(Base):
     price = mapped_column(Numeric(10, 2), nullable=False)
     salon_id = mapped_column(Integer, ForeignKey(
         'salons.salon_id'), nullable=False)
-    created_at = mapped_column(Date)
-    updated_at = mapped_column(Date)
+    created_at = mapped_column(DateTime, default=func.now())
+    updated_at = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
     appointments = relationship('Appointment', back_populates="service")
     salon = relationship('Salon', back_populates="services")
@@ -244,8 +243,8 @@ class Salon(Base):
     status = mapped_column(String(20), nullable=False,
                            default='ACTIVE')  # New field
     opening_hours = mapped_column(JSON, nullable=True)  # New field
-    created_at = mapped_column(Date)
-    updated_at = mapped_column(Date)
+    created_at = mapped_column(DateTime, default=func.now())
+    updated_at = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
     owner = relationship('User', back_populates="salon")
     services = relationship('Service', back_populates="salon")
@@ -316,8 +315,8 @@ class Role(Base):
     id = mapped_column(Integer, primary_key=True)
     name = mapped_column(String(255), nullable=False, unique=True)
     description = mapped_column(Text, nullable=True)
-    created_at = mapped_column(Date)
-    updated_at = mapped_column(Date)
+    created_at = mapped_column(DateTime, default=func.now())
+    updated_at = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
     users = relationship('User', back_populates="role")
 
@@ -331,8 +330,8 @@ class Review(Base):
         'users.user_id'), nullable=False)
     salon_id = mapped_column(Integer, ForeignKey(
         'salons.salon_id', ondelete='SET NULL'), nullable=False)
-    created_at = mapped_column(Date)
-    updated_at = mapped_column(Date)
+    created_at = mapped_column(DateTime, default=func.now())
+    updated_at = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
     client = relationship('User', back_populates="reviews")
     salon = relationship('Salon', back_populates="reviews")
