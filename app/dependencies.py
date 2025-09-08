@@ -34,10 +34,10 @@ keycloak_openid = KeycloakOpenID(
 logger = logging.getLogger(__name__)
 keycloak_service = KeycloakService()
 
-def decode_token(token: str) -> User:   
+async def decode_token(token: str) -> User:   
    try:
         # Decode and validate the token using KeycloakService
-        claims = keycloak_service.decode_token(token)
+        claims = await keycloak_service.decode_token(token)
         logger.info(f"Decoded token: {claims}")
 
         # Map the claims to the User schema
@@ -59,7 +59,7 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]):
     """
     Validate the Bearer token and retreive the current user.
     """
-    user = decode_token(token)
+    user = await decode_token(token)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -70,13 +70,10 @@ async def get_current_user(token: Annotated[str, Depends(oauth2_scheme)]):
 
 async def get_current_active_user(current_user: User = Depends(get_current_user)) -> User:
     """
-    Ensure the user is active.
+    Ensure the user is active (placeholder - implement proper status checking).
+    Currently returns the user as-is since no status field exists in the User model.
     """
-    if current_user.role != "active":
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Inactive user",
-        )
+    # TODO: Add proper user status field to User model and implement status checking
     return current_user
 
 
@@ -121,7 +118,7 @@ async def get_current_user_from_keycloak(token: str = Depends(oauth2_scheme)) ->
     Validate the Bearer token and retrieve the current user from Keycloak.
     """
     try:
-        claims = keycloak_service.decode_token(token)
+        claims = await keycloak_service.decode_token(token)
         logger.info(f"Decoded token: {claims}")
         user = User(
             user_id=claims.id,
@@ -146,7 +143,7 @@ async def get_current_user_from_keycloak_with_role(token: str = Depends(oauth2_s
     Validate the Bearer token and retrieve the current user from Keycloak with a specific role.
     """
     try:
-        claims = keycloak_service.decode_token(token)
+        claims = await keycloak_service.decode_token(token)
         logger.info(f"Decoded token: {claims}")
         user = User(
             user_id=claims.id,
