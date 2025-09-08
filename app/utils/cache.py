@@ -20,7 +20,6 @@ class CustomJSONEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
-@cached(ttl=300, key="services:*")
 async def get_cached_service(db_session) -> Optional[List[dict]]:
     """Get cached Services"""
     cached_services = await cache.get('services_list')
@@ -40,7 +39,6 @@ async def invalidate_services_cache():
     await cache.delete('services_list')
 
 
-@cached(ttl=120, key="appointments:*")
 async def get_cached_appointments(db_session) -> Optional[List[dict]]:
     """ Get Cached Appointments"""
     cached_appointments = await cache.get('appointments_list')
@@ -60,7 +58,6 @@ async def invalidate_appointments_cache():
     await cache.delete('appointments_list')
 
 
-@cached(ttl=240, key="messages:*")
 async def get_cached_messages(db_session) -> Optional[List[dict]]:
     """Get Cached Messages"""
     cached_messages = await cache.get('messages_list')
@@ -72,7 +69,7 @@ async def get_cached_messages(db_session) -> Optional[List[dict]]:
 async def cache_messages_response(messages: List[MessageSchema]):
     """Cache the messages response with a 5 minute TTL"""
     serialized = [message.model_dump() for message in messages]
-    await cache.set('messages_list', json.dumps(now, cls=CustomJSONEncoder))
+    await cache.set('messages_list', json.dumps(serialized, cls=CustomJSONEncoder))
 
 
 async def invalidate_messages_cache():
@@ -80,7 +77,6 @@ async def invalidate_messages_cache():
     await cache.delete('messages_list')
 
 
-@cached(ttl=120, key="salons:*")
 async def get_cached_salons(db_session) -> Optional[List[dict]]:
     """Get cached Salons"""
     cached_salons = await cache.get('salons_list')
@@ -100,7 +96,6 @@ async def invalidate_salons_cache():
     await cache.delete('salons_list')
 
 
-@cached(ttl=120, key="profiles:*")
 async def get_cached_profiles(keycloak_id: str, db: Session) -> Optional[schemas.Profile]:
     """
     Get cached Profile
