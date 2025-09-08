@@ -4,15 +4,16 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func  
-from ..database import SessionLocal
+from ..database import get_db
 from ..utils.utils import hash_password
 import logging
 import os
 import io
+import json
 from .. import models, schemas
 from ..config import settings
 from ..services.keycloak import KeycloakService
-from ..utils.cache import get_cached_profiles, invalidate_profiles_cache, cache_profiles_response
+from ..utils.cache import get_cached_profiles, invalidate_profiles_cache, cache_profiles_response, cache
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
@@ -37,12 +38,6 @@ logger = logging.getLogger(__name__)
 # drive_service = build('drive', 'v3', credentials=credentials)
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 def combine_user_profile(db_user: models.User, db_profile: models.Profile) -> schemas.Profile:
@@ -220,10 +215,11 @@ async def read_profiles(skip: int = 0, limit: int = 100, db: Session = Depends(g
     if skip < 0:
         skip = 0
 
-    cached_profiles = await get_cached_profiles(db)
+    cached_profiles = await cache.get('profiles_list')
     if cached_profiles:
         logger.info("Returning cached profiles")
-        return cached_profiles[skip:skip + limit]
+        cached_data = json.loads(cached_profiles) if isinstance(cached_profiles, str) else cached_profiles
+        return cached_data[skip:skip + limit]
 
     query = (
         db.query(models.Profile)
