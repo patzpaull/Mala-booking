@@ -3,7 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import select
-from ..database import SessionLocal, engine
+from ..database import get_db
 from ..models import Payment
 from .. import models, schemas
 
@@ -16,12 +16,6 @@ router = APIRouter(
 # Dependency to get DB session
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 # Listing all payments
 
@@ -32,14 +26,13 @@ async def read_payments(skip: int = 0, limit: int = 15, db: Session = Depends(ge
     """
     List all Payments
     """
-    payments = db.execute(select(models.Appointment)).scalars().all()
-    # appointments = db.query(models.Appointment).offset(skip).limit(limit).all()
-    return payments
+    payments = db.execute(select(models.Payment)).scalars().all()
+    return [schemas.Payment.model_validate(payment.to_dict()) for payment in payments]
 
 
 @router.get('/{payment_id}')
 async def read_payment(payment_id: int, db: Session = Depends(get_db)
-                       ) -> schemas.Appointment:
+                       ) -> schemas.Payment:
     """
     Get Specific Payment with ID 
     """
@@ -47,12 +40,12 @@ async def read_payment(payment_id: int, db: Session = Depends(get_db)
         models.Payment.payment_id == payment_id).first()
     if not payment:
         raise HTTPException(status_code=404, detail="Payment not Found")
-    return payment
+    return schemas.Payment.model_validate(payment.to_dict())
 
 
 @router.post('/')
-async def create_appointment(payment: schemas.PaymentCreate, db: Session = Depends(get_db)
-                             ) -> schemas.Payment:
+async def create_payment(payment: schemas.PaymentCreate, db: Session = Depends(get_db)
+                         ) -> schemas.Payment:
     """
     Generate a new payment 
     """
@@ -60,15 +53,17 @@ async def create_appointment(payment: schemas.PaymentCreate, db: Session = Depen
     db.add(db_payment)
     db.commit()
     db.refresh(db_payment)
-    return db_payment
+    return schemas.Payment.model_validate(db_payment.to_dict())
 
 
 @router.delete('/{payment_id}')
 async def delete_payment(payment_id: int, db: Session = Depends(get_db)) -> dict[str, str]:
     """
-    Deletes payment infoAppointment
+    Deletes payment info
     """
     db_payment = db.get(models.Payment, payment_id)
-    db.delete(payment_id)
+    if not db_payment:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    db.delete(db_payment)
     db.commit()
-    return {'message': 'Payment succesfully deleted'}
+    return {'message': 'Payment successfully deleted'}
