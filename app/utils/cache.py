@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from .. import models, schemas
 import datetime
 import json
+import enum
 from ..schemas import User as UserSchema, Payment as PaymentSchema, Appointment as AppointmentSchema, Message as MessageSchema, Salon as SalonSchema, Staff as StaffSchema, Profile as ProfileSchema, Payment as PaymentSchema, Service as ServiceSchema
 
 
@@ -17,6 +18,8 @@ class CustomJSONEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, (datetime.date, datetime.datetime, datetime.time)):
             return obj.isoformat()
+        if isinstance(obj, enum.Enum):
+            return obj.value
         return super().default(obj)
 
 
@@ -114,7 +117,7 @@ async def cache_profiles_response(profiles: List[models.Profile]):
     """
     Cache the profiles response with a 5 minute TTL
     """
-    serialized = [profile.model_dump() for profile in profiles]
+    serialized = [profile.to_dict() for profile in profiles]
     await cache.set('profiles_list', json.dumps(serialized, cls=CustomJSONEncoder))
 
 
