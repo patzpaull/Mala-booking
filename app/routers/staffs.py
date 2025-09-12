@@ -1,26 +1,20 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, selectinload
-from ..database import SessionLocal
+from ..database import get_db
 import logging
 from typing import List
 from .. import models, schemas
 from ..utils.cache import get_cached_staff, invalidate_staffs_cache, cache_staffs_response
 
 router = APIRouter(
-    prefix="/staff",
-    tags=["staff"],
+    prefix="/staffs",
+    tags=["staffs"],
     responses={404: {"description": "Not found"}},
 )
 
 logger = logging.getLogger(__name__)
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 @router.get('/', response_model=List[schemas.Staff])
