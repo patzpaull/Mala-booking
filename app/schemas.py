@@ -208,14 +208,13 @@ class PaginatedFreelancerData(BaseModel):
     items: List[FreelancerData]
 
 
+# Make AdditionalData completely flexible to accept any JSON structure
+# This allows both dict and flexible field structures
+
 class AdditionalData(BaseModel):
-    preferences: Optional[dict] = None
-    vendor: Optional[dict] = None
-    freelancer: Optional[dict] = None
-
     class Config:
-        from_attributes: True
-
+        extra = "allow"
+        from_attributes = True
 
 class PaginatedAdditionalData(BaseModel):
     total: int
@@ -228,7 +227,7 @@ class ProfileBase(BaseModel):
     firstName: str
     lastName: str
     email:  str
-    phoneNumber: Optional[str] = None
+    phone_number: Optional[str] = None
     address: Optional[str] = None
     bio: Optional[str] = None
     avatar_url: Optional[str] = None
@@ -236,7 +235,7 @@ class ProfileBase(BaseModel):
     updated_at: Optional[datetime
                          ] = None
     status: Optional[str] = None
-    additionalData: Optional[AdditionalData] = None
+    additionalData: Optional[dict] = None
     # username: Optional[str] = None
 
     class Config:
@@ -249,7 +248,7 @@ class Profile(BaseModel):
     firstName: str
     lastName: str
     email: str
-    phoneNumber: Optional[str] = None
+    phone_number: Optional[str] = None
     address: Optional[str] = None
     bio: Optional[str] = None
     avatar_url: Optional[str] = None
@@ -257,7 +256,7 @@ class Profile(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     userType: Optional[str] = None
-    additionalData: Optional[AdditionalData] = None
+    additionalData: Optional[dict] = None
 
     class Config:
         from_attributes: True
@@ -272,7 +271,7 @@ class ProfileCreate(ProfileBase):
     firstName: str
     lastName: str
     email: str
-    phoneNumber: Optional[str] = None
+    phone_number: Optional[str] = None
     address: Optional[str] = None
     bio: Optional[str] = None
     avatar_url: Optional[str] = None
@@ -305,7 +304,7 @@ class ProfileUpdate(BaseModel):
     firstName: Optional[str] = None
     lastName: Optional[str] = None
     email: Optional[str] = None
-    phoneNumber: Optional[str] = None
+    phone_number: Optional[str] = None
     address: Optional[str] = None
     bio: Optional[str] = None
     avatar_url: Optional[str] = None

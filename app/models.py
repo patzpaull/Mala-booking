@@ -127,7 +127,7 @@ class Profile(Base):
     firstName = Column(String, nullable=False)
     lastName = Column(String, nullable=False)
     email = Column(String, nullable=False)
-    phoneNumber = Column(String, nullable=True)
+    phone_number = Column(String, nullable=True)
     address = Column(String, nullable=True)
     bio = mapped_column(Text, nullable=True)
     avatar_url = Column(String, nullable=True)
@@ -154,7 +154,7 @@ class Profile(Base):
             "firstName": self.firstName,
             "lastName": self.lastName,
             "email": self.email,
-            "phoneNumber": self.phoneNumber,
+            "phone_number": self.phone_number,
             "address": self.address,
             "bio": self.bio,
             "avatar_url": self.avatar_url,
@@ -319,6 +319,15 @@ class Role(Base):
     updated_at = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
     users = relationship('User', back_populates="role")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
 
 
 class Review(Base):
