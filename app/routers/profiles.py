@@ -111,7 +111,7 @@ async def create_customer_profile(profile_create: schemas.ProfileCreate, db: Ses
     except Exception as e:
         logging.error(f"Database operation failed: {e}")
         db.rollback()
-        keycloak_service.delete_user(keycloak_id)
+        await keycloak_service.delete_user(keycloak_id)
         raise HTTPException(
             status_code=500, detail="An error occured while saving the user to the database. ")
     # Create the profile in the database
@@ -123,7 +123,7 @@ async def create_customer_profile(profile_create: schemas.ProfileCreate, db: Ses
             firstName=profile_create.firstName,
             lastName=profile_create.lastName,
             email=profile_create.email,
-            phoneNumber=profile_create.phoneNumber,
+            phone_number=profile_create.phone_number,
             address=profile_create.address,
             bio=profile_create.bio,
             avatar_url=profile_create.avatar_url,
@@ -136,7 +136,7 @@ async def create_customer_profile(profile_create: schemas.ProfileCreate, db: Ses
         db.refresh(db_profile)
     except Exception as e:
         logging.error(f"Database operation failed: {e}")
-        keycloak_service.delete_user(keycloak_id)
+        await keycloak_service.delete_user(keycloak_id)
         db.delete(user)
         db.commit()
         raise HTTPException(
@@ -160,7 +160,7 @@ async def create_customer_profile(profile_create: schemas.ProfileCreate, db: Ses
         firstName=profile_create.firstName,
         lastName=profile_create.lastName,
         email=profile_create.email,
-        phoneNumber=profile_create.phoneNumber,
+        phone_number=profile_create.phone_number,
         address=profile_create.address,
         bio=profile_create.bio,
         avatar_url=profile_create.avatar_url,
@@ -234,7 +234,7 @@ async def read_profiles(skip: int = 0, limit: int = 100, db: Session = Depends(g
         raise HTTPException(status_code=404, detail="No profiles found")
 
     serialized_profiles = [
-        schemas.Profile.model_validate(profile)
+        schemas.Profile.model_validate(profile.to_dict())
         for profile in profiles
     ]
 
