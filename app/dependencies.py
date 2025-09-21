@@ -8,10 +8,12 @@ from typing import List, Optional, Annotated
 import logging
 from jose import JWTError, jwt
 from jwt import PyJWKClient
-from . import schemas
+from sqlalchemy.orm import Session
+from . import schemas, models
 from .config import settings
 from .schemas import User
 from .services.keycloak import KeycloakService
+from .database import get_db
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl=f"{settings.keycloak_server_url}realms/{settings.keycloak_realm}/protocol/openid-connect/token")
 
@@ -109,6 +111,18 @@ async def get_current_staff(current_user: User = Depends(get_current_user)) -> U
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not enough permissions",
+        )
+    return current_user
+
+
+async def get_current_vendor(current_user: User = Depends(get_current_user)) -> User:
+    """
+    Ensure the user is a vendor.
+    """
+    if current_user.role not in ["vendor", "admin", "superuser"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Vendor access required",
         )
     return current_user
 
@@ -264,3 +278,37 @@ def require_roles(required_roles: List[str]):
             )
         return current_user
     return role_checker
+
+
+async def get_vendor_salon_id(current_user: User, db: Session) -> Optional[int]:
+    """
+    Get the salon ID for a vendor user. Returns None for admin/superuser (no filtering).
+    """
+    if current_user.role in ["admin", "superuser"]:
+        return None  # No filtering for admins
+
+    salon = db.query(models.Salon).filter(
+        models.Salon.owner_id == current_user.user_id
+    ).first()
+
+    if not salon and current_user.role == "vendor":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No salon found for this vendor"
+        )
+
+    return salon.salon_id if salon else None
+
+
+def require_salon_access():
+    """
+    Dependency that ensures vendor users can only access their own salon's data.
+    """
+    async def salon_access_checker(
+        current_user: User = Depends(get_current_vendor),
+        db: Session = Depends(get_db)
+    ):
+        salon_id = await get_vendor_salon_id(current_user, db)
+        return {"user": current_user, "salon_id": salon_id}
+
+    return salon_access_checker
