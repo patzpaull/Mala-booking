@@ -381,6 +381,35 @@ class Payment(Base):
         }
 
 
+class AuditLog(Base):
+    __tablename__ = 'audit_logs'
+    
+    id = mapped_column(Integer, primary_key=True, index=True)
+    admin_id = mapped_column(Integer, ForeignKey('users.user_id'), nullable=False)
+    action = mapped_column(String(50), nullable=False)  # CREATE, UPDATE, DELETE, VIEW
+    resource_type = mapped_column(String(50), nullable=False)  # USER, SALON, SERVICE, etc.
+    resource_id = mapped_column(String(50), nullable=True)  # ID of the resource affected
+    details = mapped_column(JSON, nullable=True)  # Additional context/changes
+    ip_address = mapped_column(String(45), nullable=True)  # Support IPv6
+    user_agent = mapped_column(String(500), nullable=True)
+    created_at = mapped_column(DateTime, default=func.now())
+    
+    admin = relationship('User', backref='audit_logs')
+    
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "admin_id": self.admin_id,
+            "action": self.action,
+            "resource_type": self.resource_type,
+            "resource_id": self.resource_id,
+            "details": self.details,
+            "ip_address": self.ip_address,
+            "user_agent": self.user_agent,
+            "created_at": self.created_at,
+        }
+
+
 # # Additional relationships
 # Appointment.payments = relationship('Payment', back_populates="appointment")
 # Salon.reviews = relationship('Review', back_populates="salon")
