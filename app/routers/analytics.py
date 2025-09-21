@@ -1,11 +1,12 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 from ..database import get_db
 from .. import models
-from sqlalchemy.sql import func
-from typing import Dict, List
+from sqlalchemy.sql import func, extract
+from typing import Dict, List, Optional
+from datetime import datetime, timedelta
 from ..utils.responses import success_response
-from ..dependencies import get_current_user
+from ..dependencies import get_current_user, require_roles
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -16,12 +17,12 @@ async def get_general_analytics(db: Session = Depends(get_db)):
     """
     total_orders = db.query(models.Appointment).count()
     total_sales = db.query(func.sum(models.Payment.amount)).scalar() or 0
-    total_revenue = total_sales * 0.8  # Example: 80% of sales is revenue
-    total_profit = total_sales * 0.2  # Example: 20% of sales is profit
+    total_revenue = float(total_sales) * 0.8  # Example: 80% of sales is revenue
+    total_profit = float(total_sales) * 0.2  # Example: 20% of sales is profit
 
     return {
         "total_orders": total_orders,
-        "total_sales": total_sales,
+        "total_sales": float(total_sales),
         "total_revenue": total_revenue,
         "total_profit": total_profit
     }
@@ -44,8 +45,8 @@ async def get_customer_analytics(db: Session = Depends(get_db)):
     Retrieve customer analytics data for the chart.
     """
     total_customers = db.query(models.User).filter(models.User.role == "customer").count()
-    new_customers = total_customers * 0.8  # Example: 80% are new
-    returning_customers = total_customers * 0.2  # Example: 20% are returning
+    new_customers = int(total_customers * 0.8)  # Example: 80% are new
+    returning_customers = int(total_customers * 0.2)  # Example: 20% are returning
 
     return {
         "total_customers": total_customers,
@@ -208,4 +209,305 @@ async def get_revenue_analytics(
     return success_response(
         data=result,
         message="Revenue analytics retrieved successfully"
+    )
+
+@router.get("/dashboard-summary")
+async def get_dashboard_summary(
+    db: Session = Depends(get_db),
+    current_user = Depends(require_roles(["admin", "superuser"]))
+):
+    """
+    Get comprehensive dashboard summary for admin portal - covers all KPIs mentioned in technical specs
+    """
+    # User counts by type
+    total_customers = db.query(models.Profile).filter(
+        models.Profile.userType == "CUSTOMER"
+    ).count()
+    
+    total_vendors = db.query(models.Profile).filter(
+        models.Profile.userType == "VENDOR"
+    ).count()
+    
+    total_freelancers = db.query(models.Profile).filter(
+        models.Profile.userType == "FREELANCE"
+    ).count()
+    
+    total_admins = db.query(models.Profile).filter(
+        models.Profile.userType == "ADMIN"
+    ).count()
+    
+    total_users = total_customers + total_vendors + total_freelancers + total_admins
+    
+    # Salon counts
+    total_salons = db.query(models.Salon).count()
+    active_salons = db.query(models.Salon).filter(
+        models.Salon.status == 'ACTIVE'
+    ).count()
+    inactive_salons = total_salons - active_salons
+    
+    # Service and appointment counts
+    total_services = db.query(models.Service).count()
+    total_appointments = db.query(models.Appointment).count()
+    
+    # Appointment status breakdown
+    pending_appointments = db.query(models.Appointment).filter(
+        models.Appointment.status == 'pending'
+    ).count()
+    confirmed_appointments = db.query(models.Appointment).filter(
+        models.Appointment.status == 'confirmed'
+    ).count()
+    completed_appointments = db.query(models.Appointment).filter(
+        models.Appointment.status == 'completed'
+    ).count()
+    cancelled_appointments = db.query(models.Appointment).filter(
+        models.Appointment.status == 'cancelled'
+    ).count()
+    
+    # Revenue metrics
+    total_revenue = db.query(
+        func.sum(models.Payment.amount)
+    ).filter(
+        models.Payment.payment_status == 'completed'
+    ).scalar() or 0
+    
+    # Message counts
+    total_messages = db.query(models.Message).count()
+    
+    # Growth metrics (last 30 days)
+    thirty_days_ago = datetime.now() - timedelta(days=30)
+    new_users_this_month = db.query(models.Profile).filter(
+        models.Profile.created_at >= thirty_days_ago
+    ).count()
+    
+    new_appointments_this_month = db.query(models.Appointment).filter(
+        models.Appointment.created_at >= thirty_days_ago
+    ).count()
+    
+    return success_response(
+        data={
+            "users": {
+                "total": total_users,
+                "customers": total_customers,
+                "vendors": total_vendors,
+                "freelancers": total_freelancers,
+                "admins": total_admins,
+                "new_this_month": new_users_this_month
+            },
+            "salons": {
+                "total": total_salons,
+                "active": active_salons,
+                "inactive": inactive_salons
+            },
+            "services": {
+                "total": total_services
+            },
+            "appointments": {
+                "total": total_appointments,
+                "pending": pending_appointments,
+                "confirmed": confirmed_appointments,
+                "completed": completed_appointments,
+                "cancelled": cancelled_appointments,
+                "new_this_month": new_appointments_this_month
+            },
+            "revenue": {
+                "total": float(total_revenue)
+            },
+            "messages": {
+                "total": total_messages
+            }
+        },
+        message="Dashboard summary retrieved successfully"
+    )
+
+@router.get("/users-growth")
+async def get_users_growth(
+    period: str = Query("monthly", regex="^(daily|weekly|monthly)$"),
+    db: Session = Depends(get_db),
+    current_user = Depends(require_roles(["admin", "superuser"]))
+):
+    """
+    Get user growth data over time segmented by role - required by technical specs
+    """
+    # Calculate date grouping based on period
+    if period == "daily":
+        date_trunc = func.date_trunc('day', models.Profile.created_at)
+        days_back = 30
+    elif period == "weekly":
+        date_trunc = func.date_trunc('week', models.Profile.created_at)
+        days_back = 84  # 12 weeks
+    else:  # monthly
+        date_trunc = func.date_trunc('month', models.Profile.created_at)
+        days_back = 365  # 12 months
+    
+    start_date = datetime.now() - timedelta(days=days_back)
+    
+    # Get user growth by role
+    growth_data = db.query(
+        date_trunc.label('period'),
+        models.Profile.userType,
+        func.count(models.Profile.profile_id).label('count')
+    ).filter(
+        models.Profile.created_at >= start_date
+    ).group_by(
+        date_trunc, models.Profile.userType
+    ).order_by(
+        date_trunc
+    ).all()
+    
+    # Format data for frontend
+    result = {}
+    for period_date, user_type, count in growth_data:
+        period_str = period_date.isoformat() if period_date else "unknown"
+        if period_str not in result:
+            result[period_str] = {"period": period_str, "customers": 0, "vendors": 0, "freelancers": 0, "admins": 0}
+        
+        if user_type == "CUSTOMER":
+            result[period_str]["customers"] = count
+        elif user_type == "VENDOR":
+            result[period_str]["vendors"] = count
+        elif user_type == "FREELANCE":
+            result[period_str]["freelancers"] = count
+        elif user_type == "ADMIN":
+            result[period_str]["admins"] = count
+    
+    return success_response(
+        data=list(result.values()),
+        message=f"User growth data ({period}) retrieved successfully"
+    )
+
+@router.get("/top-salons")
+async def get_top_salons(
+    limit: int = Query(10, ge=1, le=50),
+    db: Session = Depends(get_db),
+    current_user = Depends(require_roles(["admin", "superuser"]))
+):
+    """
+    Get most booked salons - required by technical specs
+    """
+    top_salons = db.query(
+        models.Salon.salon_id,
+        models.Salon.name,
+        models.Salon.city,
+        func.count(models.Appointment.appointment_id).label('booking_count')
+    ).join(
+        models.Service, models.Salon.salon_id == models.Service.salon_id
+    ).join(
+        models.Appointment, models.Service.service_id == models.Appointment.service_id
+    ).group_by(
+        models.Salon.salon_id, models.Salon.name, models.Salon.city
+    ).order_by(
+        func.count(models.Appointment.appointment_id).desc()
+    ).limit(limit).all()
+    
+    result = [
+        {
+            "salon_id": salon_id,
+            "name": name,
+            "city": city,
+            "booking_count": booking_count
+        }
+        for salon_id, name, city, booking_count in top_salons
+    ]
+    
+    return success_response(
+        data=result,
+        message="Top salons retrieved successfully"
+    )
+
+@router.get("/appointments-trend")
+async def get_appointments_trend(
+    period: str = Query("monthly", regex="^(daily|weekly|monthly)$"),
+    db: Session = Depends(get_db),
+    current_user = Depends(require_roles(["admin", "superuser"]))
+):
+    """
+    Get booking trends by day/week/month - required by technical specs
+    """
+    # Calculate date grouping and period
+    if period == "daily":
+        date_trunc = func.date_trunc('day', models.Appointment.created_at)
+        days_back = 30
+    elif period == "weekly":
+        date_trunc = func.date_trunc('week', models.Appointment.created_at)
+        days_back = 84  # 12 weeks
+    else:  # monthly
+        date_trunc = func.date_trunc('month', models.Appointment.created_at)
+        days_back = 365  # 12 months
+    
+    start_date = datetime.now() - timedelta(days=days_back)
+    
+    trend_data = db.query(
+        date_trunc.label('period'),
+        models.Appointment.status,
+        func.count(models.Appointment.appointment_id).label('count')
+    ).filter(
+        models.Appointment.created_at >= start_date
+    ).group_by(
+        date_trunc, models.Appointment.status
+    ).order_by(
+        date_trunc
+    ).all()
+    
+    # Format data for frontend
+    result = {}
+    for period_date, status, count in trend_data:
+        period_str = period_date.isoformat() if period_date else "unknown"
+        if period_str not in result:
+            result[period_str] = {
+                "period": period_str,
+                "pending": 0,
+                "confirmed": 0,
+                "completed": 0,
+                "cancelled": 0,
+                "total": 0
+            }
+        
+        result[period_str][status] = count
+        result[period_str]["total"] += count
+    
+    return success_response(
+        data=list(result.values()),
+        message=f"Appointment trends ({period}) retrieved successfully"
+    )
+
+@router.get("/salons-location")
+async def get_salons_by_location(
+    db: Session = Depends(get_db),
+    current_user = Depends(require_roles(["admin", "superuser"]))
+):
+    """
+    Get salon distribution by location - required by technical specs
+    """
+    location_data = db.query(
+        models.Salon.city,
+        models.Salon.state,
+        models.Salon.country,
+        func.count(models.Salon.salon_id).label('salon_count'),
+        func.avg(models.Salon.latitude).label('avg_latitude'),
+        func.avg(models.Salon.longitude).label('avg_longitude')
+    ).group_by(
+        models.Salon.city, models.Salon.state, models.Salon.country
+    ).having(
+        models.Salon.city.isnot(None)
+    ).order_by(
+        func.count(models.Salon.salon_id).desc()
+    ).all()
+    
+    result = [
+        {
+            "city": city,
+            "state": state,
+            "country": country,
+            "salon_count": salon_count,
+            "coordinates": {
+                "latitude": float(avg_lat) if avg_lat else None,
+                "longitude": float(avg_lng) if avg_lng else None
+            }
+        }
+        for city, state, country, salon_count, avg_lat, avg_lng in location_data
+    ]
+    
+    return success_response(
+        data=result,
+        message="Salon location distribution retrieved successfully"
     )
