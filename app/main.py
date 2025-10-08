@@ -23,20 +23,21 @@ from app.services.keycloak import KeycloakService
 from app.monitoring import log_performance_summary
 from app.utils.responses import error_response
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Set event loop policy for better performance
     if hasattr(uvloop, 'install'):
         uvloop.install()
-    
+
     # Initialize services
     keycloak_service = KeycloakService()
-    
+
     # Start performance monitoring
     monitor_task = asyncio.create_task(log_performance_summary())
-    
+
     yield
-    
+
     # Cleanup on shutdown
     monitor_task.cancel()
     await KeycloakService.close_http_client()
@@ -60,7 +61,7 @@ class ConnectionManager:
 
     async def connect(self, websocket: WebSocket, connection_type: str = "general", identifier: str = None):
         await websocket.accept()
-        
+
         if connection_type == "admin":
             self.admin_connections.append(websocket)
         elif connection_type == "appointment" and identifier:
@@ -80,7 +81,8 @@ class ConnectionManager:
             elif connection_type == "appointment" and identifier:
                 appointment_id = int(identifier)
                 if appointment_id in self.appointment_connections:
-                    self.appointment_connections[appointment_id].remove(websocket)
+                    self.appointment_connections[appointment_id].remove(
+                        websocket)
                     if not self.appointment_connections[appointment_id]:
                         del self.appointment_connections[appointment_id]
             else:
@@ -97,12 +99,12 @@ class ConnectionManager:
 
     async def broadcast(self, message: str, connection_type: str = "general"):
         connections = []
-        
+
         if connection_type == "admin":
             connections = self.admin_connections
         elif connection_type in self.active_connections:
             connections = self.active_connections[connection_type]
-        
+
         # Send to all connections, removing broken ones
         broken_connections = []
         for connection in connections:
@@ -110,7 +112,7 @@ class ConnectionManager:
                 await connection.send_text(message)
             except:
                 broken_connections.append(connection)
-        
+
         # Clean up broken connections
         for broken_connection in broken_connections:
             self.disconnect(broken_connection, connection_type)
@@ -119,16 +121,17 @@ class ConnectionManager:
         if appointment_id in self.appointment_connections:
             connections = self.appointment_connections[appointment_id].copy()
             broken_connections = []
-            
+
             for connection in connections:
                 try:
                     await connection.send_text(message)
                 except:
                     broken_connections.append(connection)
-            
+
             # Clean up broken connections
             for broken_connection in broken_connections:
-                self.disconnect(broken_connection, "appointment", str(appointment_id))
+                self.disconnect(broken_connection,
+                                "appointment", str(appointment_id))
 
     async def notify_admins(self, event_type: str, data: dict):
         """Send real-time notifications to admin dashboard"""
@@ -156,11 +159,7 @@ app.add_middleware(CacheControlMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",
-        "https://localhost:3000",
-        "http://127.0.0.1:3000",
-        "https://mala-booking.onrender.com",
-        "*"  # Allow all for now, restrict in production
+        "http://localhost:3000"
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
@@ -186,7 +185,8 @@ app.add_middleware(
     https_only=False  # Set to True in production when using HTTPS
 )
 
-app.add_middleware(RateLimiterMiddleware, max_requests=100, window_seconds=60)  # Increased limit for better performance
+# Increased limit for better performance
+app.add_middleware(RateLimiterMiddleware, max_requests=100, window_seconds=60)
 
 
 # Include routers with v1 versioning
@@ -228,6 +228,7 @@ async def websocket_appointment_endpoint(websocket: WebSocket, appointment_id: i
         manager.disconnect(websocket, "appointment", str(appointment_id))
         await manager.broadcast_to_appointment(appointment_id, f"User left appointment {appointment_id} chat")
 
+
 @app.websocket("/ws/admin")
 async def websocket_admin_endpoint(websocket: WebSocket):
     """
@@ -239,14 +240,16 @@ async def websocket_admin_endpoint(websocket: WebSocket):
             # Keep connection alive and handle any admin-specific messages
             data = await websocket.receive_text()
             message_data = json.loads(data)
-            
+
             if message_data.get("type") == "ping":
                 await manager.send_personal_message(
-                    json.dumps({"type": "pong", "timestamp": datetime.now().isoformat()}),
+                    json.dumps(
+                        {"type": "pong", "timestamp": datetime.now().isoformat()}),
                     websocket
                 )
     except WebSocketDisconnect:
         manager.disconnect(websocket, "admin")
+
 
 @app.websocket("/ws/messages/{appointment_id}")
 async def websocket_messages_endpoint(websocket: WebSocket, appointment_id: int):
@@ -258,10 +261,10 @@ async def websocket_messages_endpoint(websocket: WebSocket, appointment_id: int)
         while True:
             data = await websocket.receive_text()
             message_data = json.loads(data)
-            
+
             # Broadcast to appointment participants
             await manager.broadcast_to_appointment(appointment_id, data)
-            
+
             # Notify admins of message activity
             await manager.notify_admins("message_activity", {
                 "appointment_id": appointment_id,
@@ -275,7 +278,7 @@ async def websocket_messages_endpoint(websocket: WebSocket, appointment_id: int)
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     return error_response(
-        message="Validation error", 
+        message="Validation error",
         code=422,
         details={"errors": exc.errors(), "body": exc.body}
     )
