@@ -226,14 +226,13 @@ class ProfileBase(BaseModel):
     userType: str
     firstName: str
     lastName: str
-    email:  str
+    email:  Optional[str] = None
     phone_number: Optional[str] = None
     address: Optional[str] = None
     bio: Optional[str] = None
     avatar_url: Optional[str] = None
     created_at: Optional[datetime] = None
-    updated_at: Optional[datetime
-                         ] = None
+    updated_at: Optional[datetime] = None
     status: Optional[str] = None
     additionalData: Optional[dict] = None
     # username: Optional[str] = None
@@ -247,7 +246,7 @@ class Profile(BaseModel):
     keycloak_id: str
     firstName: str
     lastName: str
-    email: str
+    email: Optional[str] = None
     phone_number: Optional[str] = None
     address: Optional[str] = None
     bio: Optional[str] = None
@@ -257,6 +256,8 @@ class Profile(BaseModel):
     updated_at: Optional[datetime] = None
     userType: Optional[str] = None
     additionalData: Optional[dict] = None
+    username: Optional[str] = None
+    tokens: Optional[Dict[str, Any]] = None
 
     class Config:
         from_attributes: True
@@ -270,14 +271,14 @@ class PaginatedProfile(BaseModel):
 class ProfileCreate(ProfileBase):
     firstName: str
     lastName: str
-    email: str
+    # username: Optional[str] = None
+    email: Optional[str] = None
     phone_number: Optional[str] = None
     address: Optional[str] = None
     bio: Optional[str] = None
     avatar_url: Optional[str] = None
     password: str
-    # status: Optional[str] = None
-    userType: Optional[str] = "CUSTOMER"
+    userType: Optional[str] = None
     additionalData: Optional[dict] = None
 
     class Config:
@@ -301,6 +302,7 @@ def validate_userType(cls, v):
 
 
 class ProfileUpdate(BaseModel):
+    # username: Optional[str] = None
     firstName: Optional[str] = None
     lastName: Optional[str] = None
     email: Optional[str] = None
@@ -600,3 +602,24 @@ class RoleUpdate(BaseModel):
 
     class Config:
         from_attributes: True
+
+
+# File Upload Schemas
+
+class FileUploadResponse(BaseModel):
+    message: str
+    file_url: str
+    uploaded_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes: True
+
+
+class AvatarUploadResponse(FileUploadResponse):
+    user_type: str
+    keycloak_id: str
+
+
+class SalonImageUploadResponse(FileUploadResponse):
+    salon_id: int
+    image_type: str = "cover"
