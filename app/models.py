@@ -123,7 +123,7 @@ class Profile(Base):
         'users.user_id'), nullable=True, unique=True)
     keycloak_id = Column(String, ForeignKey(
         'users.keycloak_id'), nullable=False, unique=True)
-    userType = Column(Enum(UserType), nullable=False)
+    userType = Column(String(32), nullable=False, default='CUSTOMER')
     firstName = Column(String, nullable=False)
     lastName = Column(String, nullable=False)
     email = Column(String, nullable=False)
@@ -131,10 +131,11 @@ class Profile(Base):
     address = Column(String, nullable=True)
     bio = mapped_column(Text, nullable=True)
     avatar_url = Column(String, nullable=True)
-    status = Column(Enum(Status), nullable=False)
+    status = Column(String, nullable=False)
     additionalData = Column(JSON, nullable=True)
-    created_at = mapped_column(DateTime, default=func.now())
-    updated_at = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+    username = Column(String(255), nullable=True)
+    created_at = mapped_column(Date, default=func.now())
+    updated_at = mapped_column(Date, default=func.now(), onupdate=func.now())
 
     # user = relationship('User', back_populates="profile",
     #                     foreign_keys='User.keycloak_id')
@@ -158,10 +159,9 @@ class Profile(Base):
             "address": self.address,
             "bio": self.bio,
             "avatar_url": self.avatar_url,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
             "status": self.status,
             "additionalData": self.additionalData,
+            "username": self.username,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
