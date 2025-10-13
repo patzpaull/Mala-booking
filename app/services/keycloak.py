@@ -87,12 +87,12 @@ class KeycloakService:
             await cls._http_client.aclose()
             cls._http_client = None
 
-    async def create_user_async(self, email: str, username: str, password: str, first_name: str, last_name: str) -> str:
+    async def create_user_async(self, email: str, username: str, password: str, first_name: str, last_name: str, role: str| None = None) -> str:
         """
-        Create a user in Keycloak asynchronously
+        Create a user in Keycloak asynchronously @ role is optional and will be added on to realm roles if provided
         """
         try:
-            new_user = await self.keycloak_admin.a_create_user({
+            payload ={
                 "email": email,
                 "username": username,
                 "firstName": first_name,
@@ -100,7 +100,11 @@ class KeycloakService:
                 "enabled": True,
                 "emailVerified": True,
                 "credentials": [{"type": "password", "value": password, "temporary": False}]
-            }, exist_ok=False)
+            }
+            if role: 
+                payload["realmRoles"] = [role]
+
+            new_user = await self.keycloak_admin.a_create_user(payload, exist_ok=False)
 
             logger.info(f"User created in Keycloak: {new_user}")
 
@@ -127,7 +131,7 @@ class KeycloakService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Failed to create user in Keycloak"
             )
-
+            
     async def create_user(self, email: str, username: str, password: str, first_name: str, last_name: str, role: str) -> str:
         try:
             new_user = self.keycloak_admin.create_user({
