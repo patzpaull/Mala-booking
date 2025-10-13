@@ -38,6 +38,14 @@ class Settings(BaseSettings):
     # google_service_account: str = os.getenv("GOOGLE_SERVICE_ACCOUNT")
     # google_drive_folder_id: str = os.getenv("GOOGLE_FOLDER_ID")
 
+    # DigitalOcean Spaces Configuration
+    do_spaces_region: str = os.getenv("DO_SPACES_REGION", "fra1")
+    do_spaces_bucket: str = os.getenv("DO_SPACES_BUCKET", "schoolmate-silo")
+    do_spaces_endpoint: str = os.getenv("DO_SPACES_ENDPOINT", "https://fra1.digitaloceanspaces.com")
+    do_spaces_access_key: str = os.getenv("DO_SPACES_ACCESS_KEY", "")
+    do_spaces_secret_key: str = os.getenv("DO_SPACES_SECRET_KEY", "")
+    do_spaces_cdn_endpoint: str = os.getenv("DO_SPACES_CDN_ENDPOINT", "")
+
     @computed_field(return_type=str)
     @property
     def keycloak_openid_config_url(self):
