@@ -22,6 +22,9 @@ from app.routers import appointments, users, messages, payments, services, staff
 from app.services.keycloak import KeycloakService
 from app.monitoring import log_performance_summary
 from app.utils.responses import error_response
+from app.utils.utils import ensure_roles_exist
+from app.database import get_db
+from app.scheduler import start_scheduler, stop_scheduler
 
 
 @asynccontextmanager
@@ -33,6 +36,23 @@ async def lifespan(app: FastAPI):
     # Initialize services
     keycloak_service = KeycloakService()
 
+    # Initialize roles in database
+    try:
+        db = next(get_db())
+        ensure_roles_exist(db)
+        logging.info("Roles initialized successfully")
+    except Exception as e:
+        logging.error(f"Failed to initialize roles: {e}")
+    finally:
+        db.close()
+
+    # Start background scheduler for periodic tasks
+    try:
+        start_scheduler()
+        logging.info("Background scheduler started successfully")
+    except Exception as e:
+        logging.error(f"Failed to start scheduler: {e}")
+
     # Start performance monitoring
     monitor_task = asyncio.create_task(log_performance_summary())
 
@@ -40,6 +60,7 @@ async def lifespan(app: FastAPI):
 
     # Cleanup on shutdown
     monitor_task.cancel()
+    stop_scheduler()
     await KeycloakService.close_http_client()
 
 app = FastAPI(
