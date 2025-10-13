@@ -1,11 +1,12 @@
 # app/routers/services.py
 
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Query
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Query, Request
 from sqlalchemy.orm import Session
-from sqlalchemy import func  
+from sqlalchemy import func
 from ..database import get_db
-from ..utils.utils import hash_password
+from ..utils.utils import hash_password, get_role_id_by_name
+from ..dependencies import get_current_user, require_roles
 import logging
 import os
 import io
@@ -14,9 +15,12 @@ from .. import models, schemas
 from ..config import settings
 from ..services.keycloak import KeycloakService
 from ..utils.cache import get_cached_profiles, invalidate_profiles_cache, cache_profiles_response, cache
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
+from ..services.storage import storage_service
+from ..utils.image_processor import image_processor
+from datetime import datetime as dt
+# from google.oauth2 import service_account
+# from googleapiclient.discovery import build
+# from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
 
 router = APIRouter(
     prefix="/profiles",
@@ -54,10 +58,28 @@ def combine_user_profile(db_user: models.User, db_profile: models.Profile) -> sc
     }
 
 
+def check_profile_access(keycloak_id: str, current_user: schemas.User) -> bool:
+    """
+    Check if current user can access the profile.
+    Returns True if:
+    1. User is an admin/superuser
+    2. User is accessing their own profile (keycloak_id matches)
+    """
+    # Admin and superuser can access any profile
+    if current_user.role in ["admin", "superuser"]:
+        return True
+
+    # User can access their own profile
+    if current_user.keycloak_id == keycloak_id:
+        return True
+
+    return False
+
+
 @router.post("/signup", response_model=schemas.Profile)
 async def create_customer_profile(profile_create: schemas.ProfileCreate, db: Session = Depends(get_db)) -> schemas.Profile:
     """
-    Create a new customer profile and log the user in
+    Create a new user profile (role-specific) and log the user in
     """
 
     # Sanitize input
@@ -68,42 +90,48 @@ async def create_customer_profile(profile_create: schemas.ProfileCreate, db: Ses
     # profile_create.address = profile_create.address.strip()
     # profile_create.bio = profile_create.bio.strip()
     # profile_create.avatar_url = profile_create.avatar_url.strip()
-
-    profile_username = profile_create.firstName + profile_create.lastName
-    profile_user = profile_username.lower().replace(" ", "")
+    # if getattr(profile_create, "username", None):
+        # profile_create.username = profile_create.username.strip()
+    # else:
+    profile_username = (profile_create.firstName + profile_create.lastName).lower().replace(" ", "")
 
     # Register the user in Keycloak
     try:
         keycloak_id = await keycloak_service.create_user_async(
-            username=profile_user,
+            username=profile_username,
             email=profile_create.email,
             first_name=profile_create.firstName,
             last_name=profile_create.lastName,
             password=profile_create.password,
-            # role="CUSTOMER"
+            role=(profile_create.userType or "CUSTOMER").upper()
         )
         logger.info(f"Keycloak user created: {keycloak_id}")
     except HTTPException as e:
-        raise e
-        # logging.error(f"Keycloak user creation failed: {e.detail}")
-        # raise HTTPException(status_code=e.status_code, detail=f"Keycloak creation failed: {e.detail}")
+        # raise e
+        logging.error(f"Keycloak user creation failed: {e.detail}")
+        raise HTTPException(status_code=e.status_code, detail=f"Keycloak creation failed: {e.detail}")
     except Exception as e:
         logging.error(f"Unexpected error during Keycloak user creation: {e}")
         raise HTTPException(
             status_code=500, detail="Unexpected error during user creation")
+    # Get role_id from role name
+    role_id = get_role_id_by_name(db, profile_create.userType)
+    if not role_id:
+        logging.error(f"Invalid role: {profile_create.userType}")
+        await keycloak_service.delete_user(keycloak_id)
+        raise HTTPException(
+            status_code=400, detail=f"Invalid role: {profile_create.userType}")
 
+    # Persist local user (Avoid nested transaction)
     try:
-        with db.begin():
             user = models.User(
                 keycloak_id=keycloak_id,
                 email=profile_create.email,
-                username=profile_user,
+                username=profile_username,
                 first_name=profile_create.firstName,
                 last_name=profile_create.lastName,
-                # password_hash=profile_create.password,
-                # password_hash=signup_req.password_hash,
                 password_hash=hash_password(profile_create.password),
-                role_id=2,
+                role_id=role_id
             )
             db.add(user)
             db.flush()
@@ -127,9 +155,10 @@ async def create_customer_profile(profile_create: schemas.ProfileCreate, db: Ses
             address=profile_create.address,
             bio=profile_create.bio,
             avatar_url=profile_create.avatar_url,
-            userType="CUSTOMER",
+            userType=profile_create.userType,
             status="ACTIVE",
             additionalData=profile_create.additionalData,
+            username=profile_username
         )
         db.add(db_profile)
         db.commit()
@@ -157,6 +186,7 @@ async def create_customer_profile(profile_create: schemas.ProfileCreate, db: Ses
     return schemas.Profile(
         user_id=user.user_id,
         keycloak_id=keycloak_id,
+        username=profile_username,
         firstName=profile_create.firstName,
         lastName=profile_create.lastName,
         email=profile_create.email,
@@ -164,7 +194,7 @@ async def create_customer_profile(profile_create: schemas.ProfileCreate, db: Ses
         address=profile_create.address,
         bio=profile_create.bio,
         avatar_url=profile_create.avatar_url,
-        userType="CUSTOMER",
+        userType=profile_create.userType,
         status="ACTIVE",
         additionalData=profile_create.additionalData,
         tokens=tokens)
@@ -172,15 +202,22 @@ async def create_customer_profile(profile_create: schemas.ProfileCreate, db: Ses
 
 @router.get("/customers/{keycloak_id}", response_model=schemas.Profile)
 async def read_customer_profile(keycloak_id: str,
-                                db: Session = Depends(get_db)
+                                db: Session = Depends(get_db),
+                                current_user: schemas.User = Depends(get_current_user)
                                 ) -> schemas.Profile:
     """
-    Get a User's Profile by keycloak_id
+    Get a Customer's Profile by keycloak_id
+    Accessible by: Profile owner OR admin
     """
+
+    # Check access rights
+    if not check_profile_access(keycloak_id, current_user):
+        raise HTTPException(
+            status_code=403, detail="You don't have permission to access this profile")
 
     cached_profile = await get_cached_profiles(keycloak_id, db)
     if cached_profile:
-        logging.info("Returning cached profile for keycloak_id: {keycloak_id}")
+        logging.info(f"Returning cached profile for keycloak_id: {keycloak_id}")
         return cached_profile
 
     # Fetch profile
@@ -191,10 +228,6 @@ async def read_customer_profile(keycloak_id: str,
         raise HTTPException(
             status_code=404, detail="Profile Not Found. Please create or update your profile")
 
-    # keycloak_user = keycloak_service.get_user_by_id(keycloak_id)
-    # if not keycloak_user:
-    #     raise HTTPException(status_code=404, detail="User Not Found")
-
     profile_dict = db_profile.to_dict()
 
     await cache_profiles_response([db_profile])
@@ -203,9 +236,10 @@ async def read_customer_profile(keycloak_id: str,
 
 
 @router.get("/", response_model=List[schemas.Profile])
-async def read_profiles(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)) -> List[schemas.Profile]:
+async def read_profiles(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), current_user: schemas.User = Depends(require_roles(["admin", "superuser"]))) -> List[schemas.Profile]:
     """
     Retrieve all profiles (paginated)
+    Admin/Superuser only - for listing all profiles
     """
 
     logger.info("Fetching profiles with pagination")
@@ -267,10 +301,16 @@ async def update_profile(keycloak_id: str, profile_update: schemas.ProfileUpdate
 
 
 @router.patch("/customers/{keycloak_id}", response_model=schemas.Profile)
-async def patch_customer_profile(keycloak_id: str, profile_patch: schemas.ProfileUpdate, db: Session = Depends(get_db)) -> schemas.Profile:
+async def patch_customer_profile(keycloak_id: str, profile_patch: schemas.ProfileUpdate, db: Session = Depends(get_db), current_user: schemas.User = Depends(get_current_user)) -> schemas.Profile:
     """
     Partially update a Customer's profile
+    Accessible by: Profile owner OR admin
     """
+    # Check access rights
+    if not check_profile_access(keycloak_id, current_user):
+        raise HTTPException(
+            status_code=403, detail="You don't have permission to update this profile")
+
     db_profile = db.query(models.Profile).filter(
         models.Profile.keycloak_id == keycloak_id, models.Profile.userType == "CUSTOMER").first()
 
@@ -287,8 +327,149 @@ async def patch_customer_profile(keycloak_id: str, profile_patch: schemas.Profil
 
     profile_dict = db_profile.to_dict()
     return schemas.Profile.model_validate(profile_dict)
-# 
-# 
+
+
+@router.post("/{user_type}/{keycloak_id}/avatar", response_model=schemas.AvatarUploadResponse)
+async def upload_avatar(
+    user_type: str,
+    keycloak_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_user)
+) -> schemas.AvatarUploadResponse:
+    """
+    Upload or update user avatar
+    Accessible by: User themselves OR admin/superuser
+
+    Supports: CUSTOMER, VENDOR, ADMIN, FREELANCE
+    """
+    # Validate user type
+    user_type = user_type.upper()
+    valid_types = ['CUSTOMER', 'VENDOR', 'ADMIN', 'FREELANCE']
+    if user_type not in valid_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid user type. Must be one of: {', '.join(valid_types)}"
+        )
+
+    # Check access rights
+    if not check_profile_access(keycloak_id, current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="You don't have permission to upload avatar for this profile"
+        )
+
+    # Verify profile exists
+    db_profile = db.query(models.Profile).filter(
+        models.Profile.keycloak_id == keycloak_id,
+        models.Profile.userType == user_type
+    ).first()
+
+    if not db_profile:
+        raise HTTPException(
+            status_code=404,
+            detail=f"{user_type.capitalize()} profile not found"
+        )
+
+    # Validate and process image
+    await image_processor.validate_avatar(file)
+    processed_file, ext = await image_processor.process_avatar(file)
+
+    # Create a temporary UploadFile from processed image
+    from fastapi import UploadFile as FastAPIUploadFile
+    temp_file = FastAPIUploadFile(
+        filename=f"avatar.{ext}",
+        file=processed_file
+    )
+    temp_file.content_type = f"image/{ext}"
+
+    # Upload to Spaces
+    avatar_url = await storage_service.upload_avatar(temp_file, keycloak_id, user_type)
+
+    # Update database
+    db_profile.avatar_url = avatar_url
+    db.commit()
+    db.refresh(db_profile)
+
+    await invalidate_profiles_cache()
+
+    return schemas.AvatarUploadResponse(
+        message="Avatar uploaded successfully",
+        file_url=avatar_url,
+        uploaded_at=dt.now(),
+        user_type=user_type,
+        keycloak_id=keycloak_id
+    )
+
+
+@router.delete("/{user_type}/{keycloak_id}/avatar", response_model=dict)
+async def delete_avatar(
+    user_type: str,
+    keycloak_id: str,
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_user)
+) -> dict:
+    """
+    Delete user avatar
+    Accessible by: User themselves OR admin/superuser
+    """
+    # Validate user type
+    user_type = user_type.upper()
+    valid_types = ['CUSTOMER', 'VENDOR', 'ADMIN', 'FREELANCE']
+    if user_type not in valid_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid user type. Must be one of: {', '.join(valid_types)}"
+        )
+
+    # Check access rights
+    if not check_profile_access(keycloak_id, current_user):
+        raise HTTPException(
+            status_code=403,
+            detail="You don't have permission to delete avatar for this profile"
+        )
+
+    # Verify profile exists
+    db_profile = db.query(models.Profile).filter(
+        models.Profile.keycloak_id == keycloak_id,
+        models.Profile.userType == user_type
+    ).first()
+
+    if not db_profile:
+        raise HTTPException(
+            status_code=404,
+            detail=f"{user_type.capitalize()} profile not found"
+        )
+
+    if not db_profile.avatar_url:
+        raise HTTPException(
+            status_code=404,
+            detail="No avatar found for this profile"
+        )
+
+    # Delete from Spaces
+    deleted = await storage_service.delete_avatar(
+        keycloak_id,
+        user_type,
+        db_profile.avatar_url
+    )
+
+    if deleted:
+        # Update database
+        db_profile.avatar_url = None
+        db.commit()
+        await invalidate_profiles_cache()
+
+        return {"message": "Avatar deleted successfully"}
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to delete avatar from storage"
+        )
+
+
+#
+#
 # def create_folder(folder_name, parent_folder_id=None):
     # """
     # Create a folder in Google Drive and return its ID
@@ -396,11 +577,16 @@ async def patch_customer_profile(keycloak_id: str, profile_patch: schemas.Profil
 
 
 @router.delete('/customers/{keycloak_id}', response_model=dict)
-async def delete_profile(keycloak_id: str, db: Session = Depends(get_db)) -> dict:
+async def delete_profile(keycloak_id: str, db: Session = Depends(get_db), current_user: schemas.User = Depends(get_current_user)) -> dict:
     """
-    Deletes an User's Profile
+    Deletes a Customer's Profile
+    Accessible by: Customer themselves OR admin/superuser
     """
-    # db_profile = db.query(models.Profile).filter(models.Profile.user_id == user_id).first()
+    # Check access rights
+    if not check_profile_access(keycloak_id, current_user):
+        raise HTTPException(
+            status_code=403, detail="You don't have permission to delete this profile")
+
     db_profile = db.query(models.Profile).filter(
         models.Profile.keycloak_id == keycloak_id, models.Profile.userType == "CUSTOMER").first()
 
@@ -416,10 +602,16 @@ async def delete_profile(keycloak_id: str, db: Session = Depends(get_db)) -> dic
 
 
 @router.put("/admins/{keycloak_id}", response_model=schemas.Profile)
-async def update_admin_profile(keycloak_id: str, profile_update: schemas.ProfileUpdate, db: Session = Depends(get_db)) -> schemas.Profile:
+async def update_admin_profile(keycloak_id: str, profile_update: schemas.ProfileUpdate, db: Session = Depends(get_db), current_user: schemas.User = Depends(get_current_user)) -> schemas.Profile:
     """
     Update an admin's profile
+    Accessible by: Admin themselves OR superuser
     """
+    # Check access rights
+    if not check_profile_access(keycloak_id, current_user):
+        raise HTTPException(
+            status_code=403, detail="You don't have permission to update this profile")
+
     db_profile = db.query(models.Profile).filter(
         models.Profile.keycloak_id == keycloak_id, models.Profile.userType == "ADMIN"
     ).first()
@@ -433,13 +625,17 @@ async def update_admin_profile(keycloak_id: str, profile_update: schemas.Profile
 
     db.commit()
     db.refresh(db_profile)
-    return db_profile
+    await invalidate_profiles_cache()
+
+    profile_dict = db_profile.to_dict()
+    return schemas.Profile.model_validate(profile_dict)
 
 
 @router.delete("/admins/{keycloak_id}", response_model=dict)
-async def delete_admin_profile(keycloak_id: str, db: Session = Depends(get_db)) -> dict:
+async def delete_admin_profile(keycloak_id: str, db: Session = Depends(get_db), current_user: schemas.User = Depends(require_roles(["superuser"]))) -> dict:
     """
     Delete an admin's profile
+    Accessible by: Superuser only
     """
     db_profile = db.query(models.Profile).filter(
         models.Profile.keycloak_id == keycloak_id, models.Profile.userType == "ADMIN"
@@ -451,6 +647,7 @@ async def delete_admin_profile(keycloak_id: str, db: Session = Depends(get_db)) 
 
     db.delete(db_profile)
     db.commit()
+    await invalidate_profiles_cache()
 
     return {"message": f"Admin profile for {keycloak_id} has been deleted."}
 
@@ -529,10 +726,21 @@ async def get_admin_analytics(db: Session = Depends(get_db)) -> dict:
 
 
 @router.get("/vendors/{keycloak_id}", response_model=schemas.Profile)
-async def get_vendor_profile(keycloak_id: str, db: Session = Depends(get_db)) -> schemas.Profile:
+async def get_vendor_profile(keycloak_id: str, db: Session = Depends(get_db), current_user: schemas.User = Depends(get_current_user)) -> schemas.Profile:
     """
     Retrieve a vendor's profile by keycloak_id
+    Accessible by: Vendor themselves OR admin/superuser
     """
+    # Check access rights
+    if not check_profile_access(keycloak_id, current_user):
+        raise HTTPException(
+            status_code=403, detail="You don't have permission to access this profile")
+
+    cached_profile = await get_cached_profiles(keycloak_id, db)
+    if cached_profile:
+        logging.info(f"Returning cached profile for keycloak_id: {keycloak_id}")
+        return cached_profile
+
     db_profile = db.query(models.Profile).filter(
         models.Profile.keycloak_id == keycloak_id, models.Profile.userType == "VENDOR"
     ).first()
@@ -541,14 +749,23 @@ async def get_vendor_profile(keycloak_id: str, db: Session = Depends(get_db)) ->
         raise HTTPException(
             status_code=404, detail="Vendor profile not found.")
 
-    return db_profile
+    profile_dict = db_profile.to_dict()
+    await cache_profiles_response([db_profile])
+
+    return schemas.Profile.model_validate(profile_dict)
 
 
 @router.put("/vendors/{keycloak_id}", response_model=schemas.Profile)
-async def update_vendor_profile(keycloak_id: str, profile_update: schemas.ProfileUpdate, db: Session = Depends(get_db)) -> schemas.Profile:
+async def update_vendor_profile(keycloak_id: str, profile_update: schemas.ProfileUpdate, db: Session = Depends(get_db), current_user: schemas.User = Depends(get_current_user)) -> schemas.Profile:
     """
     Update a vendor's profile
+    Accessible by: Vendor themselves OR admin/superuser
     """
+    # Check access rights
+    if not check_profile_access(keycloak_id, current_user):
+        raise HTTPException(
+            status_code=403, detail="You don't have permission to update this profile")
+
     db_profile = db.query(models.Profile).filter(
         models.Profile.keycloak_id == keycloak_id, models.Profile.userType == "VENDOR"
     ).first()
@@ -562,4 +779,169 @@ async def update_vendor_profile(keycloak_id: str, profile_update: schemas.Profil
 
     db.commit()
     db.refresh(db_profile)
-    return db_profile
+    await invalidate_profiles_cache()
+
+    profile_dict = db_profile.to_dict()
+    return schemas.Profile.model_validate(profile_dict)
+
+
+@router.delete("/vendors/{keycloak_id}", response_model=dict)
+async def delete_vendor_profile(keycloak_id: str, db: Session = Depends(get_db), current_user: schemas.User = Depends(require_roles(["admin", "superuser"]))) -> dict:
+    """
+    Delete a vendor's profile
+    Accessible by: Admin or Superuser only
+    """
+    db_profile = db.query(models.Profile).filter(
+        models.Profile.keycloak_id == keycloak_id, models.Profile.userType == "VENDOR"
+    ).first()
+
+    if not db_profile:
+        raise HTTPException(
+            status_code=404, detail="Vendor profile not found.")
+
+    db.delete(db_profile)
+    db.commit()
+    await invalidate_profiles_cache()
+
+    return {"message": f"Vendor profile for {keycloak_id} has been deleted."}
+
+
+@router.get("/admins/{keycloak_id}", response_model=schemas.Profile)
+async def get_admin_profile(keycloak_id: str, db: Session = Depends(get_db), current_user: schemas.User = Depends(get_current_user)) -> schemas.Profile:
+    """
+    Retrieve an admin's profile by keycloak_id
+    Accessible by: Admin themselves OR superuser
+    """
+    # Check access rights
+    if not check_profile_access(keycloak_id, current_user):
+        raise HTTPException(
+            status_code=403, detail="You don't have permission to access this profile")
+
+    cached_profile = await get_cached_profiles(keycloak_id, db)
+    if cached_profile:
+        logging.info(f"Returning cached profile for keycloak_id: {keycloak_id}")
+        return cached_profile
+
+    db_profile = db.query(models.Profile).filter(
+        models.Profile.keycloak_id == keycloak_id, models.Profile.userType == "ADMIN"
+    ).first()
+
+    if not db_profile:
+        raise HTTPException(
+            status_code=404, detail="Admin profile not found.")
+
+    profile_dict = db_profile.to_dict()
+    await cache_profiles_response([db_profile])
+
+    return schemas.Profile.model_validate(profile_dict)
+
+
+@router.get("/freelancers/{keycloak_id}", response_model=schemas.Profile)
+async def get_freelancer_profile(keycloak_id: str, db: Session = Depends(get_db), current_user: schemas.User = Depends(get_current_user)) -> schemas.Profile:
+    """
+    Retrieve a freelancer's profile by keycloak_id
+    Accessible by: Freelancer themselves OR admin/superuser
+    """
+    # Check access rights
+    if not check_profile_access(keycloak_id, current_user):
+        raise HTTPException(
+            status_code=403, detail="You don't have permission to access this profile")
+
+    cached_profile = await get_cached_profiles(keycloak_id, db)
+    if cached_profile:
+        logging.info(f"Returning cached profile for keycloak_id: {keycloak_id}")
+        return cached_profile
+
+    db_profile = db.query(models.Profile).filter(
+        models.Profile.keycloak_id == keycloak_id, models.Profile.userType == "FREELANCE"
+    ).first()
+
+    if not db_profile:
+        raise HTTPException(
+            status_code=404, detail="Freelancer profile not found.")
+
+    profile_dict = db_profile.to_dict()
+    await cache_profiles_response([db_profile])
+
+    return schemas.Profile.model_validate(profile_dict)
+
+
+@router.put("/freelancers/{keycloak_id}", response_model=schemas.Profile)
+async def update_freelancer_profile(keycloak_id: str, profile_update: schemas.ProfileUpdate, db: Session = Depends(get_db), current_user: schemas.User = Depends(get_current_user)) -> schemas.Profile:
+    """
+    Update a freelancer's profile
+    Accessible by: Freelancer themselves OR admin/superuser
+    """
+    # Check access rights
+    if not check_profile_access(keycloak_id, current_user):
+        raise HTTPException(
+            status_code=403, detail="You don't have permission to update this profile")
+
+    db_profile = db.query(models.Profile).filter(
+        models.Profile.keycloak_id == keycloak_id, models.Profile.userType == "FREELANCE"
+    ).first()
+
+    if not db_profile:
+        raise HTTPException(
+            status_code=404, detail="Freelancer profile not found.")
+
+    for key, value in profile_update.model_dump(exclude_none=True).items():
+        setattr(db_profile, key, value)
+
+    db.commit()
+    db.refresh(db_profile)
+    await invalidate_profiles_cache()
+
+    profile_dict = db_profile.to_dict()
+    return schemas.Profile.model_validate(profile_dict)
+
+
+@router.patch("/freelancers/{keycloak_id}", response_model=schemas.Profile)
+async def patch_freelancer_profile(keycloak_id: str, profile_patch: schemas.ProfileUpdate, db: Session = Depends(get_db), current_user: schemas.User = Depends(get_current_user)) -> schemas.Profile:
+    """
+    Partially update a freelancer's profile
+    Accessible by: Freelancer themselves OR admin/superuser
+    """
+    # Check access rights
+    if not check_profile_access(keycloak_id, current_user):
+        raise HTTPException(
+            status_code=403, detail="You don't have permission to update this profile")
+
+    db_profile = db.query(models.Profile).filter(
+        models.Profile.keycloak_id == keycloak_id, models.Profile.userType == "FREELANCE"
+    ).first()
+
+    if not db_profile:
+        raise HTTPException(
+            status_code=404, detail="Freelancer profile not found.")
+
+    for key, val in profile_patch.model_dump(exclude_none=True).items():
+        setattr(db_profile, key, val)
+
+    db.commit()
+    db.refresh(db_profile)
+    await invalidate_profiles_cache()
+
+    profile_dict = db_profile.to_dict()
+    return schemas.Profile.model_validate(profile_dict)
+
+
+@router.delete("/freelancers/{keycloak_id}", response_model=dict)
+async def delete_freelancer_profile(keycloak_id: str, db: Session = Depends(get_db), current_user: schemas.User = Depends(require_roles(["admin", "superuser"]))) -> dict:
+    """
+    Delete a freelancer's profile
+    Accessible by: Admin or Superuser only
+    """
+    db_profile = db.query(models.Profile).filter(
+        models.Profile.keycloak_id == keycloak_id, models.Profile.userType == "FREELANCE"
+    ).first()
+
+    if not db_profile:
+        raise HTTPException(
+            status_code=404, detail="Freelancer profile not found.")
+
+    db.delete(db_profile)
+    db.commit()
+    await invalidate_profiles_cache()
+
+    return {"message": f"Freelancer profile for {keycloak_id} has been deleted."}
