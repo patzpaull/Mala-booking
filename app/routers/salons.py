@@ -1,15 +1,19 @@
 # app/routers/services.py
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import select
 from ..database import SessionLocal, engine
 from ..models import Salon
 from datetime import datetime
+from datetime import datetime as dt
 
 import logging
 from .. import models, schemas
 from ..utils.cache import get_cached_salons, invalidate_salons_cache, cache_salons_response
+from ..services.storage import storage_service
+from ..utils.image_processor import image_processor
+from ..dependencies import get_current_user
 
 router = APIRouter(
     prefix="/salons",
@@ -206,3 +210,120 @@ async def delete_service(salon_id: int, db: Session = Depends(get_db)) -> dict[s
     db.commit()
     await invalidate_salons_cache()
     return {'message': 'Salon was succesfully deleted'}
+
+
+@router.post("/{salon_id}/image", response_model=schemas.SalonImageUploadResponse)
+async def upload_salon_image(
+    salon_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_user)
+) -> schemas.SalonImageUploadResponse:
+    """
+    Upload or update salon cover image
+    Accessible by: Salon owner OR admin/superuser
+    """
+    # Verify salon exists
+    db_salon = db.query(models.Salon).filter(
+        models.Salon.salon_id == salon_id
+    ).first()
+
+    if not db_salon:
+        raise HTTPException(
+            status_code=404,
+            detail="Salon not found"
+        )
+
+    # Check access rights (salon owner or admin)
+    if current_user.role not in ["admin", "superuser"]:
+        # Check if user is the salon owner
+        if not hasattr(db_salon, 'owner_id') or db_salon.owner_id != current_user.user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="You don't have permission to upload images for this salon"
+            )
+
+    # Validate and process image
+    await image_processor.validate_salon_image(file)
+    processed_file, ext = await image_processor.process_salon_image(file)
+
+    # Create a temporary UploadFile from processed image
+    from fastapi import UploadFile as FastAPIUploadFile
+    temp_file = FastAPIUploadFile(
+        filename=f"cover.{ext}",
+        file=processed_file
+    )
+    temp_file.content_type = f"image/{ext}"
+
+    # Upload to Spaces
+    image_url = await storage_service.upload_salon_image(temp_file, salon_id, "cover")
+
+    # Update database
+    db_salon.image_url = image_url
+    db.commit()
+    db.refresh(db_salon)
+
+    await invalidate_salons_cache()
+
+    return schemas.SalonImageUploadResponse(
+        message="Salon image uploaded successfully",
+        file_url=image_url,
+        uploaded_at=dt.now(),
+        salon_id=salon_id,
+        image_type="cover"
+    )
+
+
+@router.delete("/{salon_id}/image", response_model=dict)
+async def delete_salon_image(
+    salon_id: int,
+    db: Session = Depends(get_db),
+    current_user: schemas.User = Depends(get_current_user)
+) -> dict:
+    """
+    Delete salon cover image
+    Accessible by: Salon owner OR admin/superuser
+    """
+    # Verify salon exists
+    db_salon = db.query(models.Salon).filter(
+        models.Salon.salon_id == salon_id
+    ).first()
+
+    if not db_salon:
+        raise HTTPException(
+            status_code=404,
+            detail="Salon not found"
+        )
+
+    # Check access rights
+    if current_user.role not in ["admin", "superuser"]:
+        if not hasattr(db_salon, 'owner_id') or db_salon.owner_id != current_user.user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="You don't have permission to delete images for this salon"
+            )
+
+    if not db_salon.image_url:
+        raise HTTPException(
+            status_code=404,
+            detail="No image found for this salon"
+        )
+
+    # Delete from Spaces
+    deleted = await storage_service.delete_salon_image(
+        salon_id,
+        db_salon.image_url
+    )
+
+    if deleted:
+        # Update database
+        db_salon.image_url = None
+        db.commit()
+        await invalidate_salons_cache()
+
+        return {"message": "Salon image deleted successfully"}
+    else:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to delete salon image from storage"
+        )
